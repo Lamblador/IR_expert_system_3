@@ -1,0 +1,10 @@
+max_files: 80
+random_seed: 42
+train_frac: 0.8
+model: sklearn_rf
+n_estimators: 80
+max_depth: 16
+min_samples_leaf: 2
+torch_epochs: 3
+torch_batch_size: 16
+torch_lr: 0.001

@@ -1,0 +1,798 @@
+# Справочник полос: функциональные группы, органические связи, примеры неорганических / гетероатомов.
+# range_* в см⁻¹; smarts — паттерн RDKit; applicability — organic | inorganic | both
+
+bands:
+  - band_id: oh_alcohol
+    group: hydroxyl
+    atom_pair: O-H
+    vibration_type: stretch
+    range_min_cm1: 3200
+    range_max_cm1: 3650
+    typical_intensity: strong_broad
+    intensity_reliability: medium
+    smarts: "[OX2H]"
+    applicability: organic
+    notes: "Широкая полоса спиртов; водородные связи."
+    source: "correlation charts"
+
+  - band_id: nh_stretch
+    group: amine
+    atom_pair: N-H
+    vibration_type: stretch
+    range_min_cm1: 3300
+    range_max_cm1: 3500
+    typical_intensity: medium
+    intensity_reliability: medium
+    smarts: "[NX3;H2,H1]"
+    applicability: organic
+    notes: "NH/NH2 аминов (табл. ru.wikipedia: NH2 3500—3300; NH 3450—3300). Пересечение с амидами."
+    source: "correlation charts; ru.wikipedia IR table"
+
+  - band_id: ch_sp3
+    group: alkyl
+    atom_pair: C-H
+    vibration_type: stretch
+    range_min_cm1: 2840
+    range_max_cm1: 3000
+    typical_intensity: strong
+    intensity_reliability: high
+    smarts: "[CX4H3,CX4H2,CX4H1]"
+    applicability: organic
+    notes: "Алифатический C–H (табл. ru.wikipedia: 3000—2840 см⁻¹)."
+    source: "correlation charts; ru.wikipedia IR table"
+
+  - band_id: ch_sp2_aromatic
+    group: aromatic
+    atom_pair: C-H
+    vibration_type: stretch
+    range_min_cm1: 3000
+    range_max_cm1: 3100
+    typical_intensity: weak_medium
+    intensity_reliability: medium
+    smarts: "[cH]"
+    applicability: organic
+    notes: "Ароматический C-H."
+    source: "correlation charts"
+
+  - band_id: carbonyl
+    group: carbonyl
+    atom_pair: C=O
+    vibration_type: stretch
+    range_min_cm1: 1650
+    range_max_cm1: 1750
+    typical_intensity: very_strong
+    intensity_reliability: high
+    smarts: "[CX3]=[OX1]"
+    applicability: organic
+    notes: "Кетоны/альдегиды/эфиры смещают диапазон; здесь центральная зона."
+    source: "correlation charts"
+
+  - band_id: alkene_cc
+    group: alkene
+    atom_pair: C=C
+    vibration_type: stretch
+    range_min_cm1: 1620
+    range_max_cm1: 1680
+    typical_intensity: weak_medium
+    intensity_reliability: medium
+    smarts: "[CX3]=[CX3]"
+    applicability: organic
+    notes: "Замещение сильно влияет на интенсивность."
+    source: "correlation charts"
+
+  - band_id: aromatic_cc_ring
+    group: aromatic_ring
+    atom_pair: C=C
+    vibration_type: ring_stretch
+    range_min_cm1: 1450
+    range_max_cm1: 1600
+    typical_intensity: medium
+    intensity_reliability: medium
+    smarts: "c1ccccc1"
+    applicability: organic
+    notes: "Упрощённый бензольный каркас; другие ароматические системы требуют доп. паттернов."
+    source: "correlation charts"
+
+  - band_id: coo_hydroxyl_carbonyl
+    group: carboxylic
+    atom_pair: C=O
+    vibration_type: stretch_acid
+    range_min_cm1: 1700
+    range_max_cm1: 1725
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "[CX3](=O)[OX2H]"
+    applicability: organic
+    notes: "Кислотная карбонильная компонента."
+    source: "correlation charts"
+
+  - band_id: nitrile
+    group: nitrile
+    atom_pair: C#N
+    vibration_type: stretch
+    range_min_cm1: 2200
+    range_max_cm1: 2260
+    typical_intensity: medium_strong
+    intensity_reliability: high
+    smarts: "[CX2]#[NX1]"
+    applicability: organic
+    notes: "Острая полоса нитрилов."
+    source: "correlation charts"
+
+  - band_id: ether_co
+    group: ether
+    atom_pair: C-O-C
+    vibration_type: stretch
+    range_min_cm1: 1050
+    range_max_cm1: 1250
+    typical_intensity: strong
+    intensity_reliability: low
+    smarts: "[#6][OX2][#6]"
+    applicability: organic
+    notes: "Диапазон сильно пересекается с C-O спиртов и сложных эфиров."
+    source: "correlation charts"
+
+  - band_id: siloxane_si_o
+    group: siloxane
+    atom_pair: Si-O
+    vibration_type: stretch
+    range_min_cm1: 1000
+    range_max_cm1: 1100
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "[Si][OX2]"
+    applicability: both
+    notes: "Типичные силоксаны; для минералов см. отдельные таблицы."
+    source: "Nakamoto summary"
+
+  - band_id: sulfonyl_so2
+    group: sulfonyl
+    atom_pair: S=O
+    vibration_type: asymmetric_stretch
+    range_min_cm1: 1300
+    range_max_cm1: 1350
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "S(=O)(=O)"
+    applicability: both
+    notes: "Сульфоны и сульфоксиды частично пересекаются."
+    source: "correlation charts"
+
+  - band_id: phosphoryl_po
+    group: phosphoryl
+    atom_pair: P=O
+    vibration_type: stretch
+    range_min_cm1: 1200
+    range_max_cm1: 1300
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "[P]=[O]"
+    applicability: both
+    notes: "Фосфиноксиды/фосфатные производные."
+    source: "correlation charts"
+
+  - band_id: nitro_no2
+    group: nitro
+    atom_pair: N-O
+    vibration_type: asymmetric_stretch
+    range_min_cm1: 1500
+    range_max_cm1: 1570
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "[NX3](=O)=O"
+    applicability: organic
+    notes: "Нитросоединения."
+    source: "correlation charts"
+
+  # --- Дополнение по таблице ru.wikipedia «Таблица характеристических частот в ИК спектроскопии» ---
+
+  - band_id: wiki_ch3_deform
+    group: alkyl
+    atom_pair: C-H
+    vibration_type: deformation
+    range_min_cm1: 1430
+    range_max_cm1: 1470
+    typical_intensity: medium
+    intensity_reliability: medium
+    smarts: "[CX4H3]"
+    applicability: organic
+    notes: "CH3 деформации (wiki: 1470—1430)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_ch2_deform_scissor
+    group: alkyl
+    atom_pair: C-H
+    vibration_type: deformation
+    range_min_cm1: 1450
+    range_max_cm1: 1475
+    typical_intensity: medium
+    intensity_reliability: medium
+    smarts: "[CX4H2]"
+    applicability: organic
+    notes: "CH2 ножницы (wiki: 1475—1450)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_ch2_rock
+    group: alkyl
+    atom_pair: C-H
+    vibration_type: rock
+    range_min_cm1: 720
+    range_max_cm1: 770
+    typical_intensity: medium
+    intensity_reliability: low
+    smarts: "[CX4H2]"
+    applicability: organic
+    notes: "CH2 качание (wiki: 770—720). Ниже типичного окна FT-IR."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_cd_stretch
+    group: deuterated
+    atom_pair: C-D
+    vibration_type: stretch
+    range_min_cm1: 2080
+    range_max_cm1: 2200
+    typical_intensity: variable
+    intensity_reliability: medium
+    smarts: "[CX4D]"
+    applicability: organic
+    notes: "C–D валентное (wiki: 2200—2080)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_alkene_ch2_stretch
+    group: alkene
+    atom_pair: C-H
+    vibration_type: stretch
+    range_min_cm1: 3075
+    range_max_cm1: 3095
+    typical_intensity: medium
+    intensity_reliability: medium
+    smarts: "[CX3H2]=[CX3]"
+    applicability: organic
+    notes: "=CH2 валентное (wiki: 3095—3075)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_alkene_ch_stretch
+    group: alkene
+    atom_pair: C-H
+    vibration_type: stretch
+    range_min_cm1: 3010
+    range_max_cm1: 3040
+    typical_intensity: medium
+    intensity_reliability: medium
+    smarts: "[CX3H1]=[CX3]"
+    applicability: organic
+    notes: "=CH валентное (wiki: 3040—3010)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_alkene_ch_ip_def
+    group: alkene
+    atom_pair: C-H
+    vibration_type: deformation_in_plane
+    range_min_cm1: 1290
+    range_max_cm1: 1420
+    typical_intensity: variable
+    intensity_reliability: low
+    smarts: "[CX3H1]=[CX3]"
+    applicability: organic
+    notes: "=CH деформации в плоскости (wiki: 1420—1290)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_alkyne_terminal_ch
+    group: alkyne
+    atom_pair: C-H
+    vibration_type: stretch
+    range_min_cm1: 3250
+    range_max_cm1: 3340
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "[CX2]#[CH1]"
+    applicability: organic
+    notes: "≡C–H (wiki: 3340—3250); пересекается с O–H/N–H."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_alkyne_cc_stretch
+    group: alkyne
+    atom_pair: C#C
+    vibration_type: stretch
+    range_min_cm1: 2100
+    range_max_cm1: 2260
+    typical_intensity: weak
+    intensity_reliability: medium
+    smarts: "[CX2]#[CX2]"
+    applicability: organic
+    notes: "C≡C валентное (wiki: 2260—2100); не нитрил."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_aromatic_cc_ring
+    group: aromatic_ring
+    atom_pair: C-C
+    vibration_type: ring_stretch
+    range_min_cm1: 1475
+    range_max_cm1: 1625
+    typical_intensity: medium
+    intensity_reliability: medium
+    smarts: "[c]"
+    applicability: organic
+    notes: "Каркас ароматики C–C (wiki: 1625—1575, 1525—1475)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_aromatic_combo
+    group: aromatic_ring
+    atom_pair: C-H
+    vibration_type: combination
+    range_min_cm1: 1650
+    range_max_cm1: 2000
+    typical_intensity: very_weak
+    intensity_reliability: low
+    smarts: "[c]"
+    applicability: organic
+    notes: "Комбинационная область замещения (wiki: 2000—1650)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_cf_stretch
+    group: halo_org
+    atom_pair: C-F
+    vibration_type: stretch
+    range_min_cm1: 1000
+    range_max_cm1: 1400
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "[#6][F]"
+    applicability: organic
+    notes: "C–F (wiki: 1400—1000)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_ccl_stretch
+    group: halo_org
+    atom_pair: C-Cl
+    vibration_type: stretch
+    range_min_cm1: 1020
+    range_max_cm1: 1100
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "[#6][Cl]"
+    applicability: organic
+    notes: "C–Cl высокочастотная компонента (wiki: 1100—1020)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_cbr_stretch
+    group: halo_org
+    atom_pair: C-Br
+    vibration_type: stretch
+    range_min_cm1: 1000
+    range_max_cm1: 1080
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "[#6][Br]"
+    applicability: organic
+    notes: "C–Br (wiki: 1080—1000)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_ci_stretch
+    group: halo_org
+    atom_pair: C-I
+    vibration_type: stretch
+    range_min_cm1: 450
+    range_max_cm1: 650
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "[#6][I]"
+    applicability: organic
+    notes: "C–I (wiki: 650—450)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_alcohol_co_stretch
+    group: alcohol
+    atom_pair: C-O
+    vibration_type: stretch
+    range_min_cm1: 970
+    range_max_cm1: 1260
+    typical_intensity: strong
+    intensity_reliability: low
+    smarts: "[OX2H]"
+    applicability: organic
+    notes: "C–O спиртов/фенолов (wiki: 1260—970)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_ether_coc_asym
+    group: ether
+    atom_pair: C-O-C
+    vibration_type: asymmetric_stretch
+    range_min_cm1: 1000
+    range_max_cm1: 1310
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "[#6][OX2][#6]"
+    applicability: organic
+    notes: "C–O–C асим. (wiki: 1310—1000)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_ether_coc_sym
+    group: ether
+    atom_pair: C-O-C
+    vibration_type: symmetric_stretch
+    range_min_cm1: 870
+    range_max_cm1: 1055
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "[#6][OX2][#6]"
+    applicability: organic
+    notes: "C–O–C сим. (wiki: 1055—870)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_amine_primary_nh2
+    group: amine
+    atom_pair: N-H
+    vibration_type: stretch
+    range_min_cm1: 3300
+    range_max_cm1: 3500
+    typical_intensity: variable
+    intensity_reliability: medium
+    smarts: "[NX3H2]"
+    applicability: organic
+    notes: "NH2 первичный амин (wiki: 3500—3300)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_nitro_asym
+    group: nitro
+    atom_pair: N-O
+    vibration_type: asymmetric_stretch
+    range_min_cm1: 1490
+    range_max_cm1: 1660
+    typical_intensity: very_strong
+    intensity_reliability: high
+    smarts: "[NX3](=O)=O"
+    applicability: organic
+    notes: "NO2 асим. (wiki: 1660—1490)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_nitro_sym
+    group: nitro
+    atom_pair: N-O
+    vibration_type: symmetric_stretch
+    range_min_cm1: 1260
+    range_max_cm1: 1390
+    typical_intensity: strong
+    intensity_reliability: high
+    smarts: "[NX3](=O)=O"
+    applicability: organic
+    notes: "NO2 сим. (wiki: 1390—1260)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_imine_cn
+    group: imine
+    atom_pair: C=N
+    vibration_type: stretch
+    range_min_cm1: 1520
+    range_max_cm1: 1690
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "[CX3]=[NX2]"
+    applicability: organic
+    notes: "C=N имины/оксимы (wiki: 1690—1520)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_thiol_sh
+    group: thiol
+    atom_pair: S-H
+    vibration_type: stretch
+    range_min_cm1: 2540
+    range_max_cm1: 2600
+    typical_intensity: weak
+    intensity_reliability: medium
+    smarts: "[SX2H]"
+    applicability: organic
+    notes: "S–H (wiki: 2600—2540)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_sulfoxide_so
+    group: sulfoxide
+    atom_pair: S=O
+    vibration_type: stretch
+    range_min_cm1: 980
+    range_max_cm1: 1225
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "[SX3]=[OX1]"
+    applicability: organic
+    notes: "S=O сульфоксиды (wiki: 1225—980)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_aldehyde_fermi_ch
+    group: aldehyde
+    atom_pair: C-H
+    vibration_type: combination
+    range_min_cm1: 2680
+    range_max_cm1: 2900
+    typical_intensity: weak
+    intensity_reliability: medium
+    smarts: "[CX3H1]=[OX1]"
+    applicability: organic
+    notes: "Альдегидный C–H комбинации (wiki: 2900—2800, 2780—2680)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_ketone_co
+    group: ketone
+    atom_pair: C=O
+    vibration_type: stretch
+    range_min_cm1: 1650
+    range_max_cm1: 1775
+    typical_intensity: strong
+    intensity_reliability: high
+    smarts: "[#6][CX3](=[OX1])[#6]"
+    applicability: organic
+    notes: "Кетоны C=O (wiki: 1775—1650). Отличается от альдегидного паттерна."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_ester_co
+    group: ester
+    atom_pair: C=O
+    vibration_type: stretch
+    range_min_cm1: 1650
+    range_max_cm1: 1790
+    typical_intensity: strong
+    intensity_reliability: high
+    smarts: "[CX3](=[OX1])[OX2][#6]"
+    applicability: organic
+    notes: "Сложные эфиры C=O (wiki: 1790—1650)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_ester_co_asym_sym
+    group: ester
+    atom_pair: C-O
+    vibration_type: stretch
+    range_min_cm1: 1050
+    range_max_cm1: 1330
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "[CX3](=[OX1])[OX2][#6]"
+    applicability: organic
+    notes: "C–O эфира (wiki: 1330—1050)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_acid_oh_broad
+    group: carboxylic
+    atom_pair: O-H
+    vibration_type: stretch
+    range_min_cm1: 2500
+    range_max_cm1: 3550
+    typical_intensity: variable
+    intensity_reliability: medium
+    smarts: "[CX3](=O)[OX2H]"
+    applicability: organic
+    notes: "COO–H очень широкая (wiki: 3550—2500)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_amide_nh
+    group: amide
+    atom_pair: N-H
+    vibration_type: stretch
+    range_min_cm1: 3100
+    range_max_cm1: 3500
+    typical_intensity: medium
+    intensity_reliability: medium
+    smarts: "[NX3][CX3]=[OX1]"
+    applicability: organic
+    notes: "Амиды N–H (wiki: 3500—3100)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_amide_I
+    group: amide
+    atom_pair: C=O
+    vibration_type: stretch_amide_I
+    range_min_cm1: 1630
+    range_max_cm1: 1740
+    typical_intensity: strong
+    intensity_reliability: high
+    smarts: "[NX3][CX3]=[OX1]"
+    applicability: organic
+    notes: "Амид I (wiki: 1740—1630)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_amide_II
+    group: amide
+    atom_pair: N-H
+    vibration_type: bend_amide_II
+    range_min_cm1: 1510
+    range_max_cm1: 1630
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "[NX3][CX3]=[OX1]"
+    applicability: organic
+    notes: "Амид II (wiki: 1630—1510)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_anhydride_co
+    group: anhydride
+    atom_pair: C=O
+    vibration_type: stretch
+    range_min_cm1: 1720
+    range_max_cm1: 1870
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "[CX3](=[OX1])[OX2][CX3](=[OX1])"
+    applicability: organic
+    notes: "Ангидриды карбоновых кислот C=O (wiki: 1870—1770, 1800—1720 объединено)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_isocyanate_nco_asym
+    group: isocyanate
+    atom_pair: N=C=O
+    vibration_type: asymmetric_stretch
+    range_min_cm1: 2230
+    range_max_cm1: 2280
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "[NX2]=[CX3]=[OX1]"
+    applicability: organic
+    notes: "Изоцианаты N=C=O асим. (wiki: 2280—2230)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_isocyanate_nco_sym
+    group: isocyanate
+    atom_pair: N=C=O
+    vibration_type: symmetric_stretch
+    range_min_cm1: 1380
+    range_max_cm1: 1450
+    typical_intensity: weak
+    intensity_reliability: medium
+    smarts: "[NX2]=[CX3]=[OX1]"
+    applicability: organic
+    notes: "Изоцианаты N=C=O сим. (wiki: 1450—1380)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_silane_si_h
+    group: organosilicon
+    atom_pair: Si-H
+    vibration_type: stretch
+    range_min_cm1: 2090
+    range_max_cm1: 2250
+    typical_intensity: medium
+    intensity_reliability: medium
+    smarts: "[SiX4H1,SiX4H2,SiX4H3]"
+    applicability: both
+    notes: "Si–H (wiki: 2250—2090)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_phosphine_p_h
+    group: organophosphorus
+    atom_pair: P-H
+    vibration_type: stretch
+    range_min_cm1: 2275
+    range_max_cm1: 2440
+    typical_intensity: weak_medium
+    intensity_reliability: medium
+    smarts: "[PX4H1,PX4H2,PX3H1,PX3H2]"
+    applicability: both
+    notes: "P–H (wiki: 2440—2275)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_borane_b_h
+    group: organoboron
+    atom_pair: B-H
+    vibration_type: stretch
+    range_min_cm1: 2200
+    range_max_cm1: 2640
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "[BX4H,BX3H1,BX3H2]"
+    applicability: both
+    notes: "B–H (wiki: 2640—2200)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_nitrile_wiki_narrow
+    group: nitrile
+    atom_pair: C#N
+    vibration_type: stretch
+    range_min_cm1: 2240
+    range_max_cm1: 2260
+    typical_intensity: medium_strong
+    intensity_reliability: high
+    smarts: "[CX2]#[NX1]"
+    applicability: organic
+    notes: "C≡N узкий интервал из таблицы wiki (2260—2240); дополняет nitrile."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_thiocyanate_scn
+    group: thiocyanate
+    atom_pair: S-C#N
+    vibration_type: stretch
+    range_min_cm1: 2130
+    range_max_cm1: 2170
+    typical_intensity: medium
+    intensity_reliability: medium
+    smarts: "[SX2][CX2]#[NX1]"
+    applicability: both
+    notes: "SC≡N (wiki: 2170—2130)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_azide_linear
+    group: azide
+    atom_pair: N=N=N
+    vibration_type: stretch
+    range_min_cm1: 2130
+    range_max_cm1: 2310
+    typical_intensity: medium
+    intensity_reliability: medium
+    smarts: "[NX2]=[NX2]=[NX2]"
+    applicability: organic
+    notes: "Диазо/азид N+≡N (wiki: 2310—2130) упрощённый паттерн."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_carbodiimide_ncn
+    group: carbodiimide
+    atom_pair: N=C=N
+    vibration_type: asymmetric_stretch
+    range_min_cm1: 2120
+    range_max_cm1: 2160
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "[NX2]=[NX2]=[CX4]"
+    applicability: organic
+    notes: "Упрощённый N=C=N карбодиимиды (wiki фрагмент диазо)." 
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_si_n_stretch
+    group: organosilicon
+    atom_pair: Si-N
+    vibration_type: stretch
+    range_min_cm1: 830
+    range_max_cm1: 1250
+    typical_intensity: variable
+    intensity_reliability: low
+    smarts: "[Si][NX3]"
+    applicability: both
+    notes: "Si–N (wiki: 1250—830)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_si_c_stretch
+    group: organosilicon
+    atom_pair: Si-C
+    vibration_type: stretch
+    range_min_cm1: 650
+    range_max_cm1: 850
+    typical_intensity: medium
+    intensity_reliability: medium
+    smarts: "[Si][#6]"
+    applicability: both
+    notes: "Si–C (wiki: 850—650)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_si_cl_stretch
+    group: organosilicon
+    atom_pair: Si-Cl
+    vibration_type: stretch
+    range_min_cm1: 400
+    range_max_cm1: 625
+    typical_intensity: strong
+    intensity_reliability: low
+    smarts: "[Si][Cl]"
+    applicability: both
+    notes: "Si–Cl (wiki: <625)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_boron_bo
+    group: organoboron
+    atom_pair: B-O
+    vibration_type: stretch
+    range_min_cm1: 1310
+    range_max_cm1: 1380
+    typical_intensity: very_strong
+    intensity_reliability: medium
+    smarts: "[BX3][OX2]"
+    applicability: both
+    notes: "B–O (wiki: 1380—1310)."
+    source: "ru.wikipedia IR table"
+
+  - band_id: wiki_halide_acid_halide_co
+    group: acid_halide
+    atom_pair: C=O
+    vibration_type: stretch
+    range_min_cm1: 1750
+    range_max_cm1: 1820
+    typical_intensity: strong
+    intensity_reliability: medium
+    smarts: "[CX3](=[OX1])[Cl,Br,F,I]"
+    applicability: organic
+    notes: "Галогенангидриды C=O хлор (wiki: 1820—1750)."
+    source: "ru.wikipedia IR table"

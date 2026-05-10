@@ -1,0 +1,10 @@
+max_files: 0
+random_seed: 42
+train_frac: 0.85
+model: torch_cnn
+n_estimators: 300
+max_depth: 24
+min_samples_leaf: 1
+torch_epochs: 80
+torch_batch_size: 64
+torch_lr: 0.0005

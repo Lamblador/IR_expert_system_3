@@ -1,0 +1,5 @@
+# Локальные пути (Windows/Linux). Переопределение: IR_RAW_JCAMP_DIR, IR_PROCESSED_ROOT
+raw_jcamp_dir: downloaded_jcamp
+processed_root: data/processed
+dataset_version: dataset_v001
+bands_config: configs/bands_reference.yaml

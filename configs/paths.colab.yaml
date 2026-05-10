@@ -1,0 +1,5 @@
+# Пример для Google Colab после монтирования Drive — поправьте под свой путь
+raw_jcamp_dir: /content/drive/MyDrive/ir_data/downloaded_jcamp
+processed_root: /content/drive/MyDrive/ir_data/processed
+dataset_version: dataset_v001
+bands_config: configs/bands_reference.yaml
