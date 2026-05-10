@@ -5,6 +5,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 from ir_pipeline.bands import load_bands
 from ir_pipeline.jcamp_loader import extract_measurement_mode, extract_sample_state, flatten_if_link, read_jcamp_dict
@@ -14,6 +15,10 @@ from ir_pipeline.preprocess import (
     to_absorbance_like,
     wavenumbers_from_jcamp,
 )
+
+
+def _event(message: str) -> None:
+    tqdm.write(f"[ir-pipeline] {message}")
 
 
 def format_ir_summary(
@@ -80,6 +85,8 @@ def predict_file_visualize(
     from ir_pipeline.train_sklearn import predict_peaks, build_feature_matrix
     import joblib
 
+    _event(f"predict start: {jcamp_path}")
+    _event("reading and preprocessing JCAMP")
     d = flatten_if_link(read_jcamp_dict(jcamp_path))
     xunits = d.get("xunits")
     yunits = d.get("yunits")
@@ -107,12 +114,15 @@ def predict_file_visualize(
     if torch_bundle is not None:
         from ir_pipeline.torch_train import predict_torch_peaks
 
+        _event(f"loading torch bundle: {torch_bundle}")
         preds_raw = predict_torch_peaks(torch_bundle, Xi[0])
         bands_known = {b.band_id for b in load_bands(bands_yaml)}
         preds = {k: v for k, v in preds_raw.items() if k in bands_known}
     else:
+        _event("building sklearn feature row")
         feat_df, _ = build_feature_matrix(Xi, [sid], meta_row)
 
+        _event(f"loading sklearn bundle: {bundle_path}")
         bundle = joblib.load(bundle_path)
         mode = bundle.get("mode", "spectrum")
         if mode == "spectrum_structure":
@@ -120,6 +130,7 @@ def predict_file_visualize(
             feat_df["structure_band_count"] = float(max(1, len(bundle.get("models", {}))))
 
         bands_order = list(bundle["models"].keys())
+        _event(f"predicting peaks: models={len(bands_order)}")
         preds = predict_peaks(bundle_path, feat_df.loc[[sid]], bands_order)
 
     technique = str(meta_row.iloc[0]["measurement_mode"])
@@ -133,5 +144,8 @@ def predict_file_visualize(
     )
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    _event("writing summary.txt")
     (out_dir / "summary.txt").write_text(summary + "\n", encoding="utf-8")
+    _event("writing spectrum_pred.png")
     plot_predictions(grid.wavenumbers, grid.absorbance_normalized, preds, bands_yaml, out_dir / "spectrum_pred.png", title=str(jcamp_path.name))
+    _event("predict done")

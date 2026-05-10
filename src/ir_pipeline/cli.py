@@ -6,7 +6,7 @@ from pathlib import Path
 import click
 
 from ir_pipeline.config_loader import load_yaml, merge_train_defaults, resolve_paths
-from ir_pipeline.dataset_build import build_dataset
+from ir_pipeline.dataset_build import build_dataset, resolve_missing_structures_for_dataset
 from ir_pipeline.evaluate import evaluate_run
 from ir_pipeline.train_sklearn import train_models
 from ir_pipeline.visualize import predict_file_visualize
@@ -22,7 +22,12 @@ def main():
 @click.option("--paths", type=click.Path(exists=True, path_type=Path), default=Path("configs/paths.local.yaml"))
 @click.option("--dataset-version", type=str, default=None, help="override dataset_version из paths yaml")
 @click.option("--max-files", type=int, default=0, help="0 = все файлы (осторожно с временем)")
-@click.option("--pubchem-sleep", type=float, default=0.12, help="пауза между PubChem запросами")
+@click.option("--pubchem-sleep", type=float, default=0.12, help="пауза между PubChem запросами в slow-режиме")
+@click.option(
+    "--resolve-missing-structures",
+    is_flag=True,
+    help="медленный добор неизвестных CAS/TITLE через PubChem; по умолчанию сборка только по быстрому кэшу",
+)
 @click.option("--split-seed", type=int, default=42)
 @click.option("--train-frac", type=float, default=0.85)
 def build_dataset_cmd(
@@ -30,6 +35,7 @@ def build_dataset_cmd(
     dataset_version: str | None,
     max_files: int,
     pubchem_sleep: float,
+    resolve_missing_structures: bool,
     split_seed: int,
     train_frac: float,
 ):
@@ -43,10 +49,28 @@ def build_dataset_cmd(
         bands_yaml=p["bands_config"],
         max_files=max_files,
         pubchem_sleep_s=pubchem_sleep,
+        resolve_missing_structures=resolve_missing_structures,
         split_seed=split_seed,
         train_frac=train_frac,
     )
     click.echo(f"Dataset written to {out}")
+
+
+@main.command("resolve-missing-structures")
+@click.option("--paths", type=click.Path(exists=True, path_type=Path), default=Path("configs/paths.local.yaml"))
+@click.option("--dataset-version", type=str, default=None)
+@click.option("--pubchem-sleep", type=float, default=0.12, help="пауза между PubChem запросами")
+def resolve_missing_structures_cmd(paths: Path, dataset_version: str | None, pubchem_sleep: float):
+    """Медленный второй поток: добрать неизвестные структуры и прогреть structure_cache."""
+    cfg = load_yaml(paths)
+    p = resolve_paths(cfg)
+    dv = dataset_version or str(p["dataset_version"])
+    report = resolve_missing_structures_for_dataset(
+        processed_root=p["processed_root"],
+        dataset_version=dv,
+        pubchem_sleep_s=pubchem_sleep,
+    )
+    click.echo(f"Resolved missing structures: {report}")
 
 
 @main.command("train")

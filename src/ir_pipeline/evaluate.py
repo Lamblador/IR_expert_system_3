@@ -5,8 +5,13 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 from ir_pipeline.train_sklearn import build_feature_matrix, load_training_arrays
+
+
+def _event(message: str) -> None:
+    tqdm.write(f"[ir-pipeline] {message}")
 
 
 def evaluate_run(dataset_dir: Path, run_dir: Path, mode: str) -> dict:
@@ -15,11 +20,15 @@ def evaluate_run(dataset_dir: Path, run_dir: Path, mode: str) -> dict:
         raise FileNotFoundError(bundle_path)
     import joblib
 
+    _event(f"evaluate start: dataset={dataset_dir}, run_dir={run_dir}, mode={mode}")
+    _event(f"loading model bundle: {bundle_path}")
     bundle = joblib.load(bundle_path)
 
     label_file = dataset_dir / ("labels_spectrum.parquet" if mode == "spectrum" else "labels_structure.parquet")
+    _event(f"loading labels: {label_file}")
     labels = pd.read_parquet(label_file).dropna(subset=["observed_peak_cm1"])
 
+    _event("loading spectra and building feature matrix")
     X_raw, spectrum_ids, _ = load_training_arrays(dataset_dir)
     meta = pd.read_parquet(dataset_dir / "meta.parquet")
     feat_df, _valid_index = build_feature_matrix(X_raw, spectrum_ids, meta)
@@ -40,7 +49,7 @@ def evaluate_run(dataset_dir: Path, run_dir: Path, mode: str) -> dict:
         test_ids = cand if len(cand) > 0 else None
 
     rows = []
-    for band, model in models.items():
+    for band, model in tqdm(models.items(), total=len(models), desc="Evaluate bands", unit="band"):
         sub = labels[labels["band_id"] == band]
         if sub.empty:
             continue
@@ -58,5 +67,7 @@ def evaluate_run(dataset_dir: Path, run_dir: Path, mode: str) -> dict:
         rows.append({"band_id": band, "mae": mae, "hit_rate_in_region": hit, "n": int(len(sub))})
 
     summary = {"mode": mode, "bands": rows, "eval_subset": "test_ids_from_split_json" if test_ids else "all_labeled_rows"}
+    _event(f"writing eval_report.json: bands={len(rows)}")
     (run_dir / "eval_report.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    _event("evaluate done")
     return summary

@@ -9,8 +9,13 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error
+from tqdm import tqdm
 
 Mode = Literal["spectrum", "spectrum_structure"]
+
+
+def _event(message: str) -> None:
+    tqdm.write(f"[ir-pipeline] {message}")
 
 
 def load_training_arrays(dataset_dir: Path) -> tuple[np.ndarray, list[str], np.ndarray]:
@@ -63,15 +68,19 @@ def train_models(
     train_frac: float,
 ) -> dict:
     run_dir.mkdir(parents=True, exist_ok=True)
+    _event(f"train start: dataset={dataset_dir}, run_dir={run_dir}, mode={mode}")
 
     label_file = dataset_dir / ("labels_spectrum.parquet" if mode == "spectrum" else "labels_structure.parquet")
     if not label_file.exists():
         raise FileNotFoundError(label_file)
 
+    _event("loading spectra.npz and meta.parquet")
     X_raw, spectrum_ids, _wn = load_training_arrays(dataset_dir)
     meta = pd.read_parquet(dataset_dir / "meta.parquet")
 
+    _event("building feature matrix")
     feat_df, valid_index = build_feature_matrix(X_raw, spectrum_ids, meta)
+    _event(f"reading labels: {label_file}")
     labels = pd.read_parquet(label_file)
     labels = labels[labels["spectrum_id"].isin(valid_index)]
     labels = labels.dropna(subset=["observed_peak_cm1"])
@@ -101,6 +110,9 @@ def train_models(
     n_est = int(train_cfg.get("n_estimators", 200))
     max_depth = train_cfg.get("max_depth", None)
     min_leaf = int(train_cfg.get("min_samples_leaf", 1))
+    _event(
+        f"training RandomForest models: bands={len(band_ids)}, n_estimators={n_est}, train_ids={len(train_ids)}, test_ids={len(test_ids)}"
+    )
 
     extra_cols = []
     if mode == "spectrum_structure":
@@ -110,7 +122,7 @@ def train_models(
         feat_df["structure_band_count"] = cnt.values
         extra_cols.append("structure_band_count")
 
-    for band in band_ids:
+    for band in tqdm(band_ids, desc="Train RF per band", unit="band"):
         sub = labels[labels["band_id"] == band]
         if sub.empty:
             continue
@@ -144,11 +156,14 @@ def train_models(
         "band_ids": band_ids,
         "extra_note": "spectrum_structure adds structure_band_count",
     }
+    _event(f"trained models: {len(models)}; writing models.joblib")
     joblib.dump(bundle, run_dir / "models.joblib")
 
     out_metrics = {"per_band_mae": metrics, "n_train_spectra": len(train_ids), "n_test_spectra": len(test_ids)}
+    _event("writing metrics.json and training_config.json")
     (run_dir / "metrics.json").write_text(json.dumps(out_metrics, indent=2, ensure_ascii=False), encoding="utf-8")
     (run_dir / "training_config.json").write_text(json.dumps(train_cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+    _event("train done")
     return out_metrics
 
 

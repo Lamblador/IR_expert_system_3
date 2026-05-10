@@ -31,6 +31,10 @@ from ir_pipeline.structure_resolver import (
 )
 
 
+def _event(message: str) -> None:
+    tqdm.write(f"[ir-pipeline] {datetime.now().strftime('%H:%M:%S')} {message}")
+
+
 def _spectrum_id(path: Path) -> str:
     h = hashlib.sha1(str(path.resolve()).encode("utf-8")).hexdigest()
     return h[:16]
@@ -59,27 +63,39 @@ def build_dataset(
     bands_yaml: Path,
     max_files: int = 0,
     pubchem_sleep_s: float = 0.12,
+    resolve_missing_structures: bool = False,
     split_seed: int = 42,
     train_frac: float = 0.85,
 ) -> Path:
     """Собирает версионированный датасет: spectra.npz, meta.parquet, labels_*.parquet, manifest.json."""
     out_dir = processed_root / dataset_version
     out_dir.mkdir(parents=True, exist_ok=True)
+    _event(f"build-dataset start: version={dataset_version}, max_files={max_files or 'all'}")
 
+    _event(f"loading bands: {bands_yaml}")
     bands = load_bands(bands_yaml)
     band_ids = [b.band_id for b in bands]
+    _event(f"loaded bands: {len(band_ids)}")
 
     cache_path = structure_cache_path(processed_root, dataset_version)
+    _event(f"loading structure cache: {cache_path}")
     cache = load_structure_cache(cache_path)
+    _event(f"structure cache entries before seed: {len(cache)}")
     try:
         seeded_structures = seed_structure_cache_from_lamblador(cache, processed_root)
+        _event(f"fast structure seed ready: added_keys={seeded_structures}, cache_entries={len(cache)}")
     except Exception as e:
         seeded_structures = 0
-        tqdm.write(f"Lamblador/IRSpectra seed skipped: {e}")
+        _event(f"Lamblador/IRSpectra seed skipped: {e}")
 
     files = iter_jcamp_files(raw_jcamp_dir, max_files)
     if not files:
         raise RuntimeError(f"Не найдено JCAMP файлов в {raw_jcamp_dir}")
+    _event(f"JCAMP files selected: {len(files)} from {raw_jcamp_dir}")
+    if resolve_missing_structures:
+        _event("slow structure resolution enabled: PubChem may be called for cache misses")
+    else:
+        _event("fast structure resolution: PubChem disabled for cache misses")
 
     meta_rows: list[dict[str, Any]] = []
     rows_spec: list[dict[str, Any]] = []
@@ -143,7 +159,13 @@ def build_dataset(
 
         cas_key = (meta_common.get("cas") or "").strip()
         title_key = (meta_common.get("title") or "").strip()
-        res = resolve_structure_for_record(cas_key or None, title_key or None, cache, pubchem_sleep_s)
+        res = resolve_structure_for_record(
+            cas_key or None,
+            title_key or None,
+            cache,
+            pubchem_sleep_s,
+            allow_network=resolve_missing_structures,
+        )
 
         mol = mol_from_resolution(res)
         if res.get("smiles") is None:
@@ -177,15 +199,18 @@ def build_dataset(
         for o in obs_str:
             rows_str.append(_obs_row(sid, o, label_schema="structure_conditioned"))
 
+    _event("saving structure cache")
     save_structure_cache(cache_path, cache)
 
     if not spectra_list or last_wn is None:
         raise RuntimeError("Не удалось собрать ни одного валидного спектра — проверьте данные и QC.")
 
+    _event(f"stacking spectra arrays: n={len(spectra_list)}")
     X = np.stack(spectra_list, axis=0)
     X_abs_corr = np.stack(absorb_corr_list, axis=0)
     X_abs_interp = np.stack(absorb_interp_list, axis=0)
     C = np.stack(coverage_list, axis=0)
+    _event("writing spectra.npz")
     np.savez_compressed(
         out_dir / "spectra.npz",
         spectrum_id=np.array(spectrum_ids, dtype=object),
@@ -211,9 +236,11 @@ def build_dataset(
         "train_ids": train_ids,
         "test_ids": test_ids,
     }
+    _event("writing split.json")
     (out_dir / "split.json").write_text(json.dumps(split_payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
     meta_df = pd.DataFrame(meta_rows)
+    _event("writing parquet tables")
     meta_df.to_parquet(out_dir / "meta.parquet", index=False)
 
     pd.DataFrame(rows_spec).to_parquet(out_dir / "labels_spectrum.parquet", index=False)
@@ -231,6 +258,7 @@ def build_dataset(
         "qc_failed": qc_failed,
         "structure_unresolved_estimate": int(struct_failed),
         "structure_cache_seeded_from_lamblador": int(seeded_structures),
+        "resolve_missing_structures": bool(resolve_missing_structures),
         "band_ids": band_ids,
         "bands_config": str(bands_yaml.resolve()),
         "grid": {"min": 400.0, "max": 4000.0, "step": 2.0},
@@ -242,9 +270,71 @@ def build_dataset(
             "X_absorbance_like_interp": "interpolated absorbance/transmittance-derived on grid",
         },
     }
+    _event("writing manifest.json")
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    _event(
+        f"build-dataset done: ok={len(spectrum_ids)}, qc_failed={qc_failed}, unresolved={struct_failed}, out={out_dir}"
+    )
 
     return out_dir
+
+
+def resolve_missing_structures_for_dataset(
+    processed_root: Path,
+    dataset_version: str,
+    pubchem_sleep_s: float = 0.12,
+) -> dict[str, int | str]:
+    """Медленный опциональный добор структур для unresolved_structures.parquet."""
+    dataset_dir = processed_root / dataset_version
+    unresolved_path = dataset_dir / "unresolved_structures.parquet"
+    if not unresolved_path.exists():
+        raise FileNotFoundError(f"Нет {unresolved_path}; сначала запустите build-dataset")
+
+    _event(f"resolve-missing-structures start: version={dataset_version}")
+    cache_path = structure_cache_path(processed_root, dataset_version)
+    _event(f"loading structure cache: {cache_path}")
+    cache = load_structure_cache(cache_path)
+    unresolved = pd.read_parquet(unresolved_path)
+    _event(f"unresolved rows loaded: {len(unresolved)}")
+
+    attempted = 0
+    resolved = 0
+    seen: set[tuple[str, str]] = set()
+    for _, row in tqdm(unresolved.iterrows(), total=len(unresolved), desc="Resolve missing structures"):
+        cas_value = row.get("cas")
+        title_value = row.get("title")
+        cas = "" if pd.isna(cas_value) else str(cas_value).strip()
+        title = "" if pd.isna(title_value) else str(title_value).strip()
+        key = (cas, title[:220])
+        if key in seen:
+            continue
+        seen.add(key)
+
+        attempted += 1
+        res = resolve_structure_for_record(
+            cas or None,
+            title or None,
+            cache,
+            pubchem_sleep_s,
+            allow_network=True,
+        )
+        if res.get("smiles"):
+            resolved += 1
+
+    _event("saving updated structure cache")
+    save_structure_cache(cache_path, cache)
+    report = {
+        "dataset_version": dataset_version,
+        "attempted": attempted,
+        "resolved": resolved,
+        "cache_path": str(cache_path),
+    }
+    (dataset_dir / "resolve_missing_structures_report.json").write_text(
+        json.dumps(report, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    _event(f"resolve-missing-structures done: attempted={attempted}, resolved={resolved}")
+    return report
 
 
 def _obs_row(spectrum_id: str, o: BandObservation, label_schema: str) -> dict[str, Any]:

@@ -26,7 +26,11 @@ pip install -e ".[torch]"
 ## Команды
 
 ```bash
-# Сборка версионированного датасета ( manifest + npz + parquet )
+# Быстрая сборка версионированного датасета: только локальный/HF seed-кэш, без PubChem
+ir-pipeline build-dataset --paths configs/paths.local.yaml --max-files 0
+
+# Опционально: медленно добрать структуры, которых нет в быстром кэше, затем пересобрать датасет
+ir-pipeline resolve-missing-structures --paths configs/paths.local.yaml --dataset-version dataset_v001
 ir-pipeline build-dataset --paths configs/paths.local.yaml --max-files 0
 
 # Быстрая проверка на подвыборке

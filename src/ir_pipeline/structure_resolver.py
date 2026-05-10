@@ -11,6 +11,7 @@ from typing import Any
 
 import pandas as pd
 from rdkit import Chem, rdBase
+from tqdm import tqdm
 
 UA = "ir-pipeline/0.1 (research)"
 LAMBLADOR_IRSPECTRA_URL = "https://raw.githubusercontent.com/Lamblador/IR_expert_system_2/main/expanded_df.pkl"
@@ -26,7 +27,8 @@ def load_structure_cache(path: Path) -> dict[str, dict[str, Any]]:
         return {}
     df = pd.read_parquet(path)
     out: dict[str, dict[str, Any]] = {}
-    for _, row in df.iterrows():
+    records = df.to_dict("records")
+    for row in tqdm(records, total=len(records), desc="Load structure cache", unit="row"):
         key = str(row["lookup_key"])
         out[key] = {
             "smiles": row.get("smiles"),
@@ -40,7 +42,7 @@ def load_structure_cache(path: Path) -> dict[str, dict[str, Any]]:
 
 def save_structure_cache(path: Path, cache: dict[str, dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    rows = [{"lookup_key": k, **v} for k, v in cache.items()]
+    rows = [{"lookup_key": k, **v} for k, v in tqdm(cache.items(), total=len(cache), desc="Prepare structure cache", unit="row")]
     pd.DataFrame(rows).to_parquet(path, index=False)
 
 
@@ -49,36 +51,55 @@ def seed_structure_cache_from_lamblador(
     processed_root: Path,
     source_url: str = LAMBLADOR_IRSPECTRA_URL,
 ) -> int:
-    """Заполняет CAS -> SMILES/InChI из Lamblador/IRSpectra до сетевых запросов PubChem."""
+    """Заполняет CAS/name -> SMILES/InChI из Lamblador/IRSpectra до сетевых запросов PubChem."""
     seed_path = processed_root / LAMBLADOR_SEED_CACHE_NAME
     df = _load_lamblador_seed_table(seed_path, source_url)
+    existing_lamblador = sum(
+        1 for row in cache.values() if row.get("source") == "lamblador_irspectra" and row.get("smiles")
+    )
+    if existing_lamblador >= len(df):
+        tqdm.write(f"[ir-pipeline] Lamblador seed already present: {existing_lamblador} cache keys")
+        return 0
+
     added = 0
-    for _, row in df.iterrows():
-        cas = _normalize_cas(row.get("cas"))
-        if not cas:
-            continue
-        key = f"cas:{cas}"
-        current = cache.get(key)
-        if current and current.get("smiles"):
-            continue
-        cache[key] = {
+    for row in tqdm(df.to_dict("records"), total=len(df), desc="Seed structure cache", unit="row"):
+        resolution = {
             "smiles": row.get("smiles"),
             "inchi": row.get("inchi"),
             "inchikey": row.get("inchikey"),
             "source": "lamblador_irspectra",
             "error": None,
         }
-        added += 1
+        keys = []
+        cas = _normalize_cas(row.get("cas"))
+        if cas:
+            keys.append(f"cas:{cas}")
+        for name_col in ("name", "title"):
+            name_key = _name_lookup_key(row.get(name_col))
+            if name_key:
+                keys.append(name_key)
+        for key in dict.fromkeys(keys):
+            current = cache.get(key)
+            if current and current.get("smiles"):
+                continue
+            cache[key] = dict(resolution)
+            added += 1
     return added
 
 
 def _load_lamblador_seed_table(seed_path: Path, source_url: str) -> pd.DataFrame:
     if seed_path.exists():
-        return pd.read_parquet(seed_path)
+        cached = pd.read_parquet(seed_path)
+        expected_columns = {"cas", "name", "title", "smiles", "inchi", "inchikey"}
+        if expected_columns.issubset(cached.columns):
+            tqdm.write(f"[ir-pipeline] Lamblador seed cache loaded: {seed_path} ({len(cached)} rows)")
+            return cached
 
+    tqdm.write(f"[ir-pipeline] Loading Lamblador/IRSpectra seed from {source_url}")
     df = pd.read_pickle(source_url)
     columns = {str(c).lower(): c for c in df.columns}
     required = {"cas": columns.get("cas"), "smiles": columns.get("smiles"), "inchi": columns.get("inchi")}
+    optional = {"name": columns.get("name"), "title": columns.get("title"), "formula": columns.get("formula")}
     if not all(required.values()):
         missing = ", ".join(k for k, v in required.items() if v is None)
         raise RuntimeError(f"Lamblador/IRSpectra seed не содержит колонки: {missing}")
@@ -87,13 +108,21 @@ def _load_lamblador_seed_table(seed_path: Path, source_url: str) -> pd.DataFrame
     seen: set[str] = set()
     rdBase.DisableLog("rdApp.*")
     try:
-        for _, row in df.iterrows():
+        for _, row in tqdm(df.iterrows(), total=len(df), desc="Build Lamblador seed", unit="row"):
             cas = _normalize_cas(row[required["cas"]])
             if not cas or cas in seen:
                 continue
             res = _resolution_from_identifiers(row[required["smiles"]], row[required["inchi"]], "lamblador_irspectra")
             if res.get("smiles"):
-                rows.append({"cas": cas, **res})
+                rows.append(
+                    {
+                        "cas": cas,
+                        "name": _first_text(row[optional["name"]]) if optional["name"] else None,
+                        "title": _first_text(row[optional["title"]]) if optional["title"] else None,
+                        "formula": _first_text(row[optional["formula"]]) if optional["formula"] else None,
+                        **res,
+                    }
+                )
                 seen.add(cas)
     finally:
         rdBase.EnableLog("rdApp.*")
@@ -101,6 +130,7 @@ def _load_lamblador_seed_table(seed_path: Path, source_url: str) -> pd.DataFrame
     out = pd.DataFrame(rows)
     seed_path.parent.mkdir(parents=True, exist_ok=True)
     out.to_parquet(seed_path, index=False)
+    tqdm.write(f"[ir-pipeline] Lamblador seed cache written: {seed_path} ({len(out)} rows)")
     return out
 
 
@@ -121,6 +151,13 @@ def _first_text(*values: Any) -> str | None:
         if text:
             return text
     return None
+
+
+def _name_lookup_key(value: Any) -> str | None:
+    name = _first_text(value)
+    if not name or len(name) < 4:
+        return None
+    return f"name:{name[:220].casefold()}"
 
 
 def _resolution_from_identifiers(smiles: Any, inchi: Any, source: str) -> dict[str, Any]:
@@ -293,6 +330,7 @@ def resolve_structure_for_record(
     title: str | None,
     cache: dict[str, dict[str, Any]],
     sleep_s: float,
+    allow_network: bool = False,
 ) -> dict[str, Any]:
     """CAS → при неудаче TITLE (кэш с ключами `cas:` и `name:`)."""
     cas = (cas or "").strip()
@@ -301,29 +339,43 @@ def resolve_structure_for_record(
     if cas:
         ck = f"cas:{cas}"
         if ck not in cache:
-            cache[ck] = resolve_from_pubchem_cas(cas, sleep_s=sleep_s)
-        if cache[ck].get("smiles"):
+            if allow_network:
+                cache[ck] = resolve_from_pubchem_cas(cas, sleep_s=sleep_s)
+        elif cache[ck].get("smiles"):
+            return cache[ck]
+        if ck in cache and cache[ck].get("smiles"):
             return cache[ck]
 
     if tit and len(tit) >= 4:
-        nk = f"name:{tit[:220]}"
+        nk = _name_lookup_key(tit)
+        if nk is None:
+            return {"smiles": None, "inchi": None, "inchikey": None, "source": None, "error": "title_too_short"}
         if nk not in cache:
-            cache[nk] = resolve_from_pubchem_name(tit, sleep_s=sleep_s)
-        if cache[nk].get("smiles"):
+            if allow_network:
+                cache[nk] = resolve_from_pubchem_name(tit, sleep_s=sleep_s)
+        elif cache[nk].get("smiles"):
+            return cache[nk]
+        if nk in cache and cache[nk].get("smiles"):
             return cache[nk]
 
     if cas:
-        return cache[f"cas:{cas}"]
+        ck = f"cas:{cas}"
+        if ck in cache:
+            return cache[ck]
     if tit and len(tit) >= 4:
-        return cache[f"name:{tit[:220]}"]
-    return {"smiles": None, "inchi": None, "inchikey": None, "source": None, "error": "no_cas_or_title"}
+        nk = _name_lookup_key(tit)
+        if nk in cache:
+            return cache[nk]
+    err = "not_in_fast_structure_cache" if not allow_network else "no_cas_or_title"
+    return {"smiles": None, "inchi": None, "inchikey": None, "source": None, "error": err}
 
 
 def mol_from_resolution(res: dict[str, Any]) -> Chem.Mol | None:
     sm = res.get("smiles")
     if not sm:
         return None
-    return Chem.MolFromSmiles(sm)
+    with rdBase.BlockLogs():
+        return Chem.MolFromSmiles(sm)
 
 
 def resolve_or_cache(lookup_key: str, cache: dict[str, dict[str, Any]], resolver_fn) -> dict[str, Any]:

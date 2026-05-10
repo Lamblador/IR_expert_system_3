@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 try:
     import torch
@@ -22,6 +23,10 @@ except ImportError:
     DataLoader = None  # type: ignore
 
 SCALE_PEAK_CM = 4000.0
+
+
+def _event(message: str) -> None:
+    tqdm.write(f"[ir-pipeline] {message}")
 
 
 def is_torch_available() -> bool:
@@ -123,7 +128,9 @@ def train_torch_run(
     assert torch is not None and DataLoader is not None
 
     run_dir.mkdir(parents=True, exist_ok=True)
+    _event(f"torch-train start: dataset={dataset_dir}, run_dir={run_dir}, mode={mode}")
 
+    _event("loading spectra.npz and meta.parquet")
     X_all, spec_ids_all = _load_arrays(dataset_dir)
     meta = pd.read_parquet(dataset_dir / "meta.parquet")
     meta_ok = meta[meta["qc_ok"] == True].copy()  # noqa: E712
@@ -133,6 +140,7 @@ def train_torch_run(
     X = X_all[idx_keep]
     spec_ids = [spec_ids_all[i] for i in idx_keep]
 
+    _event("building wide target matrix")
     Y, M, band_order = build_wide_targets(dataset_dir, mode, spec_ids)
     if len(band_order) == 0:
         raise RuntimeError("Нет ни одной полосы с observed_peak_cm1 — пересоберите датасет.")
@@ -162,6 +170,7 @@ def train_torch_run(
     X_te, Y_te, M_te = X[test_rows], Y[test_rows], M[test_rows]
 
     dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    _event(f"torch device: {dev}")
 
     ds_tr = PeakMultiDataset(X_tr, Y_tr, M_tr)
     ds_te = PeakMultiDataset(X_te, Y_te, M_te)
@@ -173,6 +182,7 @@ def train_torch_run(
     model = ConvPeakMultitask(seq_len, len(band_order)).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=float(train_cfg.get("torch_lr", 1e-3)), weight_decay=1e-4)
     epochs = int(train_cfg.get("torch_epochs", 30))
+    _event(f"training epochs={epochs}, train_rows={len(train_rows)}, test_rows={len(test_rows)}, bands={len(band_order)}")
 
     history: dict[str, list[float]] = {"train_loss": [], "val_loss": [], "val_mae_cm": []}
 
@@ -203,11 +213,12 @@ def train_torch_run(
     best_val = float("inf")
     best_state = None
 
-    for _ep in range(epochs):
+    epoch_bar = tqdm(range(epochs), desc="Torch epochs", unit="epoch")
+    for _ep in epoch_bar:
         model.train()
         tl_acc = 0.0
         tn = 0
-        for xb, yb, mb in dl_tr:
+        for xb, yb, mb in tqdm(dl_tr, desc=f"Epoch {_ep + 1}/{epochs}", unit="batch", leave=False):
             xb, yb, mb = xb.to(dev), yb.to(dev), mb.to(dev)
             opt.zero_grad(set_to_none=True)
             pred = model(xb)
@@ -221,6 +232,7 @@ def train_torch_run(
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
         history["val_mae_cm"].append(val_mae_cm)
+        epoch_bar.set_postfix(train_loss=f"{train_loss:.4f}", val_loss=f"{val_loss:.4f}", val_mae_cm=f"{val_mae_cm:.1f}")
 
         if val_loss < best_val:
             best_val = val_loss
@@ -239,10 +251,13 @@ def train_torch_run(
         "history": history,
         "device_trained": dev,
     }
+    _event("writing torch_bundle.pt")
     torch.save({"model_state": model.state_dict(), "meta": bundle}, run_dir / "torch_bundle.pt")
 
+    _event("writing torch_history.json")
     (run_dir / "torch_history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
 
+    _event("writing torch_training_curve.png")
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
     axes[0].plot(history["train_loss"], label="train")
     axes[0].plot(history["val_loss"], label="val")
@@ -262,7 +277,9 @@ def train_torch_run(
         "n_bands": len(band_order),
         "run_dir": str(run_dir),
     }
+    _event("writing torch_metrics.json")
     (run_dir / "torch_metrics.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    _event("torch-train done")
     return summary
 
 
