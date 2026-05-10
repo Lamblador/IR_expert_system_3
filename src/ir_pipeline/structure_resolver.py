@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -9,9 +10,11 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from rdkit import Chem
+from rdkit import Chem, rdBase
 
 UA = "ir-pipeline/0.1 (research)"
+LAMBLADOR_IRSPECTRA_URL = "https://raw.githubusercontent.com/Lamblador/IR_expert_system_2/main/expanded_df.pkl"
+LAMBLADOR_SEED_CACHE_NAME = "lamblador_irspectra_structures.parquet"
 
 
 def structure_cache_path(processed_root: Path, dataset_version: str) -> Path:
@@ -41,10 +44,106 @@ def save_structure_cache(path: Path, cache: dict[str, dict[str, Any]]) -> None:
     pd.DataFrame(rows).to_parquet(path, index=False)
 
 
+def seed_structure_cache_from_lamblador(
+    cache: dict[str, dict[str, Any]],
+    processed_root: Path,
+    source_url: str = LAMBLADOR_IRSPECTRA_URL,
+) -> int:
+    """Заполняет CAS -> SMILES/InChI из Lamblador/IRSpectra до сетевых запросов PubChem."""
+    seed_path = processed_root / LAMBLADOR_SEED_CACHE_NAME
+    df = _load_lamblador_seed_table(seed_path, source_url)
+    added = 0
+    for _, row in df.iterrows():
+        cas = _normalize_cas(row.get("cas"))
+        if not cas:
+            continue
+        key = f"cas:{cas}"
+        current = cache.get(key)
+        if current and current.get("smiles"):
+            continue
+        cache[key] = {
+            "smiles": row.get("smiles"),
+            "inchi": row.get("inchi"),
+            "inchikey": row.get("inchikey"),
+            "source": "lamblador_irspectra",
+            "error": None,
+        }
+        added += 1
+    return added
+
+
+def _load_lamblador_seed_table(seed_path: Path, source_url: str) -> pd.DataFrame:
+    if seed_path.exists():
+        return pd.read_parquet(seed_path)
+
+    df = pd.read_pickle(source_url)
+    columns = {str(c).lower(): c for c in df.columns}
+    required = {"cas": columns.get("cas"), "smiles": columns.get("smiles"), "inchi": columns.get("inchi")}
+    if not all(required.values()):
+        missing = ", ".join(k for k, v in required.items() if v is None)
+        raise RuntimeError(f"Lamblador/IRSpectra seed не содержит колонки: {missing}")
+
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    rdBase.DisableLog("rdApp.*")
+    try:
+        for _, row in df.iterrows():
+            cas = _normalize_cas(row[required["cas"]])
+            if not cas or cas in seen:
+                continue
+            res = _resolution_from_identifiers(row[required["smiles"]], row[required["inchi"]], "lamblador_irspectra")
+            if res.get("smiles"):
+                rows.append({"cas": cas, **res})
+                seen.add(cas)
+    finally:
+        rdBase.EnableLog("rdApp.*")
+
+    out = pd.DataFrame(rows)
+    seed_path.parent.mkdir(parents=True, exist_ok=True)
+    out.to_parquet(seed_path, index=False)
+    return out
+
+
+def _normalize_cas(value: Any) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    cas = str(value).strip()
+    if not cas or not re.fullmatch(r"\d{2,10}-\d{2}-\d", cas):
+        return None
+    return cas
+
+
+def _first_text(*values: Any) -> str | None:
+    for value in values:
+        if value is None or pd.isna(value):
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _resolution_from_identifiers(smiles: Any, inchi: Any, source: str) -> dict[str, Any]:
+    sm = _first_text(smiles)
+    inch = _first_text(inchi)
+    mol = Chem.MolFromSmiles(sm) if sm else None
+    if mol is None and inch:
+        mol = Chem.MolFromInchi(inch)
+    if mol is None:
+        return {"smiles": None, "inchi": inch, "inchikey": None, "source": source, "error": "rdkit_parse_failed"}
+    return {
+        "smiles": Chem.MolToSmiles(mol),
+        "inchi": inch or Chem.MolToInchi(mol),
+        "inchikey": Chem.MolToInchiKey(mol),
+        "source": source,
+        "error": None,
+    }
+
+
 def _pubchem_rest_cas(cas: str, retries: int = 4) -> dict[str, Any]:
     cas_enc = urllib.parse.quote(cas.strip(), safe="")
     url = (
-        "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/registrynumber/"
+        "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/xref/RN/"
         f"{cas_enc}/property/IsomericSMILES,CanonicalSMILES,InChI,InChIKey/JSON"
     )
     last_err = None
@@ -54,7 +153,7 @@ def _pubchem_rest_cas(cas: str, retries: int = 4) -> dict[str, Any]:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             props = data["PropertyTable"]["Properties"][0]
-            smiles = props.get("IsomericSMILES") or props.get("CanonicalSMILES")
+            smiles = props.get("IsomericSMILES") or props.get("CanonicalSMILES") or props.get("SMILES")
             inchi = props.get("InChI")
             inchikey = props.get("InChIKey")
             if not smiles:
@@ -83,6 +182,8 @@ def _pubchem_rest_cas(cas: str, retries: int = 4) -> dict[str, Any]:
             }
         except urllib.error.HTTPError as e:
             last_err = f"HTTPError:{e.code}"
+            if 400 <= e.code < 500:
+                break
             time.sleep(1.2 * (attempt + 1))
         except Exception as e:
             last_err = str(e)

@@ -26,6 +26,7 @@ from ir_pipeline.structure_resolver import (
     mol_from_resolution,
     resolve_structure_for_record,
     save_structure_cache,
+    seed_structure_cache_from_lamblador,
     structure_cache_path,
 )
 
@@ -70,6 +71,11 @@ def build_dataset(
 
     cache_path = structure_cache_path(processed_root, dataset_version)
     cache = load_structure_cache(cache_path)
+    try:
+        seeded_structures = seed_structure_cache_from_lamblador(cache, processed_root)
+    except Exception as e:
+        seeded_structures = 0
+        tqdm.write(f"Lamblador/IRSpectra seed skipped: {e}")
 
     files = iter_jcamp_files(raw_jcamp_dir, max_files)
     if not files:
@@ -224,6 +230,7 @@ def build_dataset(
         "n_spectra_ok": int(len(spectrum_ids)),
         "qc_failed": qc_failed,
         "structure_unresolved_estimate": int(struct_failed),
+        "structure_cache_seeded_from_lamblador": int(seeded_structures),
         "band_ids": band_ids,
         "bands_config": str(bands_yaml.resolve()),
         "grid": {"min": 400.0, "max": 4000.0, "step": 2.0},
