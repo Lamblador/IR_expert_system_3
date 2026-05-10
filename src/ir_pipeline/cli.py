@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import os
+import urllib.parse
+import urllib.request
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
 import click
+from tqdm import tqdm
 
 from ir_pipeline.config_loader import load_yaml, merge_train_defaults, resolve_paths
 from ir_pipeline.dataset_build import build_dataset, resolve_missing_structures_for_dataset
@@ -16,6 +21,63 @@ from ir_pipeline import torch_train as torch_train_mod
 @click.group()
 def main():
     """IR Pipeline CLI: сборка датасета, обучение, оценка, предсказание."""
+
+
+def _download_with_progress(url: str, output: Path, token: str | None = None) -> Path:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    headers = {"User-Agent": "ir-pipeline/0.1"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        total_raw = resp.headers.get("Content-Length")
+        total = int(total_raw) if total_raw else None
+        with output.open("wb") as f, tqdm(
+            total=total,
+            unit="B",
+            unit_scale=True,
+            desc=f"Download {output.name}",
+        ) as bar:
+            while True:
+                chunk = resp.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+                bar.update(len(chunk))
+    return output
+
+
+@main.command("fetch-data")
+@click.option("--repo-id", required=True, help="Hugging Face Dataset repo, например username/ir-expert-data")
+@click.option("--filename", default="downloaded_jcamp.zip", show_default=True, help="файл в repo")
+@click.option("--revision", default="main", show_default=True)
+@click.option("--output", type=click.Path(path_type=Path), default=None, help="куда сохранить файл")
+@click.option("--extract-to", type=click.Path(path_type=Path), default=None, help="куда распаковать zip после скачивания")
+@click.option("--token-env", default="HF_TOKEN", show_default=True, help="env var с HF token для private repo")
+def fetch_data_cmd(repo_id: str, filename: str, revision: str, output: Path | None, extract_to: Path | None, token_env: str):
+    """Скачать данные из Hugging Face Dataset repo без Google Drive."""
+    filename_url = urllib.parse.quote(filename, safe="/")
+    revision_url = urllib.parse.quote(revision, safe="")
+    url = f"https://huggingface.co/datasets/{repo_id}/resolve/{revision_url}/{filename_url}"
+    out = output or Path(filename).name
+    out = Path(out)
+    token = os.environ.get(token_env)
+
+    click.echo(f"Downloading {url}")
+    downloaded = _download_with_progress(url, out, token=token)
+    click.echo(f"Downloaded to {downloaded}")
+
+    if extract_to is not None:
+        if not zipfile.is_zipfile(downloaded):
+            raise click.ClickException(f"{downloaded} не zip-файл, распаковка невозможна")
+        extract_to.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(downloaded) as zf:
+            members = zf.infolist()
+            with tqdm(total=len(members), desc=f"Extract {downloaded.name}", unit="file") as bar:
+                for member in members:
+                    zf.extract(member, extract_to)
+                    bar.update(1)
+        click.echo(f"Extracted to {extract_to}")
 
 
 @main.command("build-dataset")

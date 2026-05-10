@@ -17,6 +17,30 @@ pip install -e ".[torch]"
 
 Большие артефакты (`data/processed/`, модели) не коммитьте; для Colab см. `configs/paths.colab.yaml`.
 
+Если Google Drive не подходит, загрузите данные в Hugging Face Dataset repo и скачивайте их командой:
+
+```bash
+# Raw JCAMP: архив должен распаковаться в ./downloaded_jcamp/
+ir-pipeline fetch-data --repo-id USER/ir-expert-data --filename downloaded_jcamp.zip --extract-to .
+
+# Уже собранный датасет: архив должен распаковаться в ./data/processed/dataset_v001/
+ir-pipeline fetch-data --repo-id USER/ir-expert-data --filename dataset_v001.zip --extract-to data/processed
+```
+
+Для private repo задайте токен в окружении:
+
+```bash
+export HF_TOKEN=hf_...
+# Windows PowerShell:
+$env:HF_TOKEN = "hf_..."
+```
+
+Что загрузить на Hugging Face:
+
+- `downloaded_jcamp.zip` — исходники для полной пересборки; внутри должен быть каталог `downloaded_jcamp/` с JCAMP-файлами (`*.jdx` или файлы без расширения с CAS-именами).
+- `dataset_v001.zip` — быстрый вариант для обучения без raw-файлов; внутри должен быть каталог `dataset_v001/` с `spectra.npz`, `meta.parquet`, `labels_spectrum.parquet`, `labels_structure.parquet`, `unresolved_structures.parquet`, `structure_cache.parquet`, `split.json`, `manifest.json`.
+- Опционально `lamblador_irspectra_structures.parquet` — seed-кэш структур из Lamblador; если не загрузить, пайплайн сам пересоберёт его из публичного источника.
+
 После `build-dataset` в `data/processed/<dataset_version>/` появляются:
 
 - `spectra.npz`: `X` (нормализованный спектр), `X_absorbance_corrected`, `X_absorbance_like_interp`, `coverage`, `wavenumbers`
@@ -35,6 +59,9 @@ ir-pipeline build-dataset --paths configs/paths.local.yaml --max-files 0
 
 # Быстрая проверка на подвыборке
 ir-pipeline build-dataset --paths configs/paths.local.yaml --max-files 100 --dataset-version dataset_smoke
+
+# Скачать данные из Hugging Face Dataset repo без Google Drive
+ir-pipeline fetch-data --repo-id USER/ir-expert-data --filename downloaded_jcamp.zip --extract-to .
 
 # Обучение RandomForest (режим только спектр или спектр + SMARTS-маска)
 ir-pipeline train --paths configs/paths.local.yaml --dataset-version dataset_v001 --mode spectrum --config configs/train_smoke.yaml

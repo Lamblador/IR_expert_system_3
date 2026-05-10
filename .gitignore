@@ -16,3 +16,5 @@ reports/predict_out/
 
 .DS_Store
 Thumbs.db
+downloaded_jcamp.zip
+dataset_v*.zip
