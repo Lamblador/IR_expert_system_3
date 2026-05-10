@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import joblib
 import numpy as np
@@ -16,6 +17,132 @@ Mode = Literal["spectrum", "spectrum_structure"]
 
 def _event(message: str) -> None:
     tqdm.write(f"[ir-pipeline] {message}")
+
+
+def _effective_rf_backend(train_cfg: dict[str, Any]) -> Literal["auto", "sklearn", "cuml"]:
+    env = os.environ.get("IR_RF_BACKEND", "").strip().lower()
+    if env in ("auto", "sklearn", "cuml"):
+        return env  # type: ignore[return-value]
+    legacy = os.environ.get("IR_USE_CUML", "").strip().lower()
+    if legacy in ("0", "false", "no", "cpu", "sklearn"):
+        return "sklearn"
+    if legacy in ("1", "true", "yes", "gpu", "cuml"):
+        return "cuml"
+    raw = str(train_cfg.get("rf_backend", "auto")).strip().lower()
+    if raw in ("auto", "sklearn", "cuml"):
+        return raw  # type: ignore[return-value]
+    return "auto"
+
+
+def _cuda_device_count() -> int:
+    try:
+        import cupy as cp
+
+        return int(cp.cuda.runtime.getDeviceCount())
+    except Exception:
+        return 0
+
+
+def _try_import_cuml_rf():
+    from cuml.ensemble import RandomForestRegressor as CuMLRandomForestRegressor
+
+    return CuMLRandomForestRegressor
+
+
+def _resolve_rf_backend(policy: Literal["auto", "sklearn", "cuml"]) -> tuple[str, Any]:
+    """Возвращает ('sklearn'|'cuml', класс регрессора)."""
+    if policy == "sklearn":
+        return "sklearn", RandomForestRegressor
+
+    if policy == "cuml":
+        try:
+            CuMLRF = _try_import_cuml_rf()
+        except ImportError as e:
+            raise RuntimeError(
+                "Выбран rf_backend=cuml / IR_RF_BACKEND=cuml, но пакет cuml не установлен. "
+                "Установите: pip install -e \".[cuml]\" или cuml-cu12 (NVIDIA CUDA, см. README)."
+            ) from e
+        if _cuda_device_count() < 1:
+            raise RuntimeError(
+                "Выбран rf_backend=cuml, но CUDA GPU недоступна (cupy: getDeviceCount()==0). "
+                "Включите GPU runtime или переключите rf_backend на sklearn/auto."
+            )
+        return "cuml", CuMLRF
+
+    # auto
+    if _cuda_device_count() < 1:
+        return "sklearn", RandomForestRegressor
+    try:
+        return "cuml", _try_import_cuml_rf()
+    except ImportError:
+        return "sklearn", RandomForestRegressor
+
+
+def _maybe_configure_cuml_numpy_output(backend: str) -> None:
+    if backend != "cuml":
+        return
+    try:
+        import cuml
+
+        cuml.set_global_output_type("numpy")
+    except Exception:
+        pass
+
+
+def _make_rf(
+    backend: str,
+    rf_cls: Any,
+    *,
+    n_estimators: int,
+    max_depth: Any,
+    min_samples_leaf: int,
+    random_seed: int,
+) -> Any:
+    if backend == "sklearn":
+        return rf_cls(
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            min_samples_leaf=min_samples_leaf,
+            random_state=random_seed,
+            n_jobs=-1,
+        )
+    depth = max_depth if max_depth is not None else -1
+    return rf_cls(
+        n_estimators=n_estimators,
+        max_depth=depth,
+        min_samples_leaf=min_samples_leaf,
+        min_samples_split=2,
+        random_state=random_seed,
+        max_features=1.0,
+    )
+
+
+def _as_numpy(pred: Any) -> np.ndarray:
+    try:
+        import cupy as cp
+
+        if isinstance(pred, cp.ndarray):
+            return cp.asnumpy(pred)
+    except Exception:
+        pass
+    return np.asarray(pred)
+
+
+def infer_rf_backend(bundle: dict[str, Any]) -> Literal["sklearn", "cuml"]:
+    b = bundle.get("rf_backend")
+    if b in ("cuml", "sklearn"):
+        return b  # type: ignore[return-value]
+    sample_model = next(iter(bundle.get("models", {}).values()), None)
+    if sample_model is not None and "cuml" in type(sample_model).__module__:
+        return "cuml"
+    return "sklearn"
+
+
+def rf_predict_values(backend: str, model: Any, X: np.ndarray) -> np.ndarray:
+    if backend == "cuml":
+        X = np.asarray(X, dtype=np.float32)
+    out = model.predict(X)
+    return _as_numpy(out).reshape(-1)
 
 
 def load_training_arrays(dataset_dir: Path) -> tuple[np.ndarray, list[str], np.ndarray]:
@@ -63,12 +190,20 @@ def train_models(
     dataset_dir: Path,
     run_dir: Path,
     mode: Mode,
-    train_cfg: dict,
+    train_cfg: dict[str, Any],
     random_seed: int,
     train_frac: float,
-) -> dict:
+) -> dict[str, Any]:
     run_dir.mkdir(parents=True, exist_ok=True)
+    policy = _effective_rf_backend(train_cfg)
+    backend, rf_cls = _resolve_rf_backend(policy)
+    _maybe_configure_cuml_numpy_output(backend)
+
     _event(f"train start: dataset={dataset_dir}, run_dir={run_dir}, mode={mode}")
+    if backend == "cuml":
+        _event(f"RandomForest: rf_backend=cuml (RAPIDS cuML, CUDA GPU), policy={policy}")
+    else:
+        _event(f"RandomForest: rf_backend=sklearn (CPU), policy={policy}")
 
     label_file = dataset_dir / ("labels_spectrum.parquet" if mode == "spectrum" else "labels_structure.parquet")
     if not label_file.exists():
@@ -104,7 +239,7 @@ def train_models(
         if not test_ids:
             test_ids = train_ids
 
-    models: dict[str, RandomForestRegressor] = {}
+    models: dict[str, Any] = {}
     metrics: dict[str, float] = {}
 
     n_est = int(train_cfg.get("n_estimators", 200))
@@ -122,6 +257,8 @@ def train_models(
         feat_df["structure_band_count"] = cnt.values
         extra_cols.append("structure_band_count")
 
+    cast_f32 = backend == "cuml"
+
     for band in tqdm(band_ids, desc="Train RF per band", unit="band"):
         sub = labels[labels["band_id"] == band]
         if sub.empty:
@@ -133,21 +270,27 @@ def train_models(
         if len(sub_tr) < 5:
             continue
         X_tr = feat_df.loc[sub_tr["spectrum_id"]].values
-        y_tr = sub_tr["observed_peak_cm1"].values.astype(float)
-        rf = RandomForestRegressor(
+        y_tr = sub_tr["observed_peak_cm1"].values.astype(np.float64 if not cast_f32 else np.float32)
+        if cast_f32:
+            X_tr = X_tr.astype(np.float32, copy=False)
+        rf = _make_rf(
+            backend,
+            rf_cls,
             n_estimators=n_est,
             max_depth=max_depth,
             min_samples_leaf=min_leaf,
-            random_state=random_seed,
-            n_jobs=-1,
+            random_seed=random_seed,
         )
         rf.fit(X_tr, y_tr)
         models[band] = rf
         if len(sub_te) >= 3:
             X_te = feat_df.loc[sub_te["spectrum_id"]].values
-            y_te = sub_te["observed_peak_cm1"].values.astype(float)
+            if cast_f32:
+                X_te = X_te.astype(np.float32, copy=False)
+            y_te = sub_te["observed_peak_cm1"].values.astype(np.float64 if not cast_f32 else np.float32)
             pred = rf.predict(X_te)
-            metrics[band] = float(mean_absolute_error(y_te, pred))
+            pred = _as_numpy(pred).reshape(-1)
+            metrics[band] = float(mean_absolute_error(np.asarray(y_te).reshape(-1), pred))
 
     bundle = {
         "mode": mode,
@@ -155,11 +298,12 @@ def train_models(
         "feature_columns": feat_df.columns.tolist(),
         "band_ids": band_ids,
         "extra_note": "spectrum_structure adds structure_band_count",
+        "rf_backend": backend,
     }
     _event(f"trained models: {len(models)}; writing models.joblib")
     joblib.dump(bundle, run_dir / "models.joblib")
 
-    out_metrics = {"per_band_mae": metrics, "n_train_spectra": len(train_ids), "n_test_spectra": len(test_ids)}
+    out_metrics: dict[str, Any] = {"per_band_mae": metrics, "n_train_spectra": len(train_ids), "n_test_spectra": len(test_ids)}
     _event("writing metrics.json and training_config.json")
     (run_dir / "metrics.json").write_text(json.dumps(out_metrics, indent=2, ensure_ascii=False), encoding="utf-8")
     (run_dir / "training_config.json").write_text(json.dumps(train_cfg, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -173,7 +317,8 @@ def predict_peaks(
     bands_order: list[str],
 ) -> dict[str, float]:
     bundle = joblib.load(bundle_path)
-    models: dict[str, RandomForestRegressor] = bundle["models"]
+    models: dict[str, Any] = bundle["models"]
+    backend = infer_rf_backend(bundle)
     cols = bundle["feature_columns"]
     Xrow = align_feature_row(cols, feat_row).values
     pred: dict[str, float] = {}
@@ -181,5 +326,5 @@ def predict_peaks(
         m = models.get(b)
         if m is None:
             continue
-        pred[b] = float(m.predict(Xrow)[0])
+        pred[b] = float(rf_predict_values(backend, m, Xrow)[0])
     return pred

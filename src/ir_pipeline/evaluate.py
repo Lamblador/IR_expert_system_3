@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from ir_pipeline.train_sklearn import build_feature_matrix, load_training_arrays
+from ir_pipeline.train_sklearn import build_feature_matrix, infer_rf_backend, load_training_arrays, rf_predict_values
 
 
 def _event(message: str) -> None:
@@ -40,6 +40,7 @@ def evaluate_run(dataset_dir: Path, run_dir: Path, mode: str) -> dict:
 
     cols = bundle["feature_columns"]
     models = bundle["models"]
+    rf_backend = infer_rf_backend(bundle)
 
     split_path = dataset_dir / "split.json"
     test_ids: set[str] | None = None
@@ -59,7 +60,7 @@ def evaluate_run(dataset_dir: Path, run_dir: Path, mode: str) -> dict:
             continue
         X = feat_df.loc[sub["spectrum_id"]][cols].values
         y = sub["observed_peak_cm1"].values.astype(float)
-        pred = model.predict(X)
+        pred = rf_predict_values(rf_backend, model, X)
         mae = float(np.mean(np.abs(pred - y)))
         lo = sub["region_min_cm1"].values.astype(float)
         hi = sub["region_max_cm1"].values.astype(float)

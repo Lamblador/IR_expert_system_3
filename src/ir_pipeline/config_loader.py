@@ -24,6 +24,8 @@ def merge_train_defaults(train_cfg: dict[str, Any]) -> dict[str, Any]:
         "torch_epochs": 30,
         "torch_batch_size": 32,
         "torch_lr": 1e-3,
+        # auto | sklearn | cuml — см. train_sklearn (GPU RF через RAPIDS cuML)
+        "rf_backend": "auto",
     }
     out = {**defaults, **train_cfg}
     return out

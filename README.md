@@ -41,6 +41,17 @@ Google Colab (минимум):
 !ir-pipeline train --paths configs/paths.huggingface.yaml --mode spectrum --config configs/train_mini.yaml --run-dir runs/mini01
 ```
 
+Чтобы **`ir-pipeline train` использовал GPU** (RandomForest на CUDA через [RAPIDS cuML](https://docs.rapids.ai/api/cuml/stable/)), включите **Runtime → GPU**, затем установите cuML и при необходимости зафиксируйте бэкенд:
+
+```python
+!pip install -e ".[cuml]"
+# или: !pip install cuml-cu12
+import os
+os.environ["IR_RF_BACKEND"] = "cuml"  # опционально; при auto выберется cuML, если есть GPU и пакет
+```
+
+При отсутствии cuML или GPU пайплайн сам перейдёт на sklearn на CPU.
+
 Для private repo задайте токен в окружении:
 
 ```bash
@@ -64,7 +75,9 @@ os.environ["HF_TOKEN"] = userdata.get("HF_TOKEN")
 - `downloaded_jcamp.zip` — только если нужна полная пересборка с нуля; внутри каталог `downloaded_jcamp/` с JCAMP (`*.jdx` или имена CAS без расширения).
 - Опционально отдельным файлом в корне repo или в zip: `lamblador_irspectra_structures.parquet` в `data/processed/` — иначе seed подтянется сам при первом `build-dataset`.
 
-Почему обучение sklearn на Colab кажется «очень медленным»: для режима `spectrum` обучается **отдельный RandomForest на каждую полосу** из меток (десятки моделей), каждая видит вектор признаков длины ~1801 (точки спектра) плюс категориальные признаки, деревьев по умолчанию много (`train_smoke.yaml`: 80+). GPU RandomForest не ускоряет — только CPU и `n_jobs`. Для быстрых прогонов используйте **`configs/train_mini.yaml`** и **`dataset_mini.zip`**.
+Почему обучение sklearn на Colab кажется «очень медленным»: для режима `spectrum` обучается **отдельный RandomForest на каждую полосу** из меток (десятки моделей), каждая видит вектор признаков длины ~1801 (точки спектра) плюс категориальные признаки, деревьев по умолчанию много (`train_smoke.yaml`: 80+). Для быстрых прогонов используйте **`configs/train_mini.yaml`** и **`dataset_mini.zip`**.
+
+**GPU и `ir-pipeline train`:** по умолчанию используется **scikit-learn RandomForest** (CPU). После `pip install -e ".[cuml]"` при доступной NVIDIA GPU команда `train` может автоматически перейти на **cuML RandomForest** (см. блок Colab выше; лог: `rf_backend=cuml`). Альтернатива — **`ir-pipeline torch-train`** после `pip install -e ".[torch]"` (другая архитектура модели). Проверка CUDA: `import cupy as cp; print(cp.cuda.runtime.getDeviceCount())` или `import torch; print(torch.cuda.is_available())`.
 
 После `build-dataset` в `data/processed/<dataset_version>/` появляются:
 
@@ -115,7 +128,7 @@ ir-pipeline predict ... --run-dir runs/<torch_run> --torch --output-dir reports/
 
 - `configs/paths.local.yaml` — локальные пути
 - `configs/paths.colab.yaml` — пример для Google Drive
-- `configs/train_smoke.yaml` / `configs/train_gpu.yaml` / `configs/train_mini.yaml` — параметры обучения
+- `configs/train_smoke.yaml` / `configs/train_gpu.yaml` / `configs/train_mini.yaml` — параметры обучения (`rf_backend: auto|sklearn|cuml` или переменная `IR_RF_BACKEND`)
 - `configs/paths.huggingface.yaml` — пути после `fetch-data` без Drive
 - `configs/bands_reference.yaml` — полосы (correlation charts + ru.wikipedia), диапазоны см⁻¹, SMARTS
 
