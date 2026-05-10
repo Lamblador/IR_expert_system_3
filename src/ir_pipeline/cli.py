@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import os
+import shutil
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import click
+from huggingface_hub import hf_hub_download
+from huggingface_hub.utils import EntryNotFoundError, HfHubHTTPError, RepositoryNotFoundError
 from tqdm import tqdm
 
 from ir_pipeline.config_loader import load_yaml, merge_train_defaults, resolve_paths
@@ -27,7 +31,7 @@ def _download_with_progress(url: str, output: Path, token: str | None = None) ->
     output.parent.mkdir(parents=True, exist_ok=True)
     headers = {"User-Agent": "ir-pipeline/0.1"}
     if token:
-        headers["Authorization"] = f"Bearer {token}"
+        headers["Authorization"] = f"Bearer {token.strip()}"
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=120) as resp:
         total_raw = resp.headers.get("Content-Length")
@@ -48,24 +52,104 @@ def _download_with_progress(url: str, output: Path, token: str | None = None) ->
 
 
 @main.command("fetch-data")
-@click.option("--repo-id", required=True, help="Hugging Face Dataset repo, например username/ir-expert-data")
+@click.option(
+    "--repo-id",
+    default="Lamblador/IRSpectra2",
+    show_default=True,
+    help="Hugging Face Dataset repo",
+)
 @click.option("--filename", default="downloaded_jcamp.zip", show_default=True, help="файл в repo")
 @click.option("--revision", default="main", show_default=True)
 @click.option("--output", type=click.Path(path_type=Path), default=None, help="куда сохранить файл")
 @click.option("--extract-to", type=click.Path(path_type=Path), default=None, help="куда распаковать zip после скачивания")
 @click.option("--token-env", default="HF_TOKEN", show_default=True, help="env var с HF token для private repo")
-def fetch_data_cmd(repo_id: str, filename: str, revision: str, output: Path | None, extract_to: Path | None, token_env: str):
-    """Скачать данные из Hugging Face Dataset repo без Google Drive."""
-    filename_url = urllib.parse.quote(filename, safe="/")
-    revision_url = urllib.parse.quote(revision, safe="")
-    url = f"https://huggingface.co/datasets/{repo_id}/resolve/{revision_url}/{filename_url}"
-    out = output or Path(filename).name
-    out = Path(out)
-    token = os.environ.get(token_env)
+@click.option(
+    "--token",
+    default=None,
+    help="HF token напрямую (нежелательно в истории shell); предпочтительнее HF_TOKEN",
+)
+@click.option(
+    "--legacy-http",
+    is_flag=True,
+    help="скачивать через urllib (без LFS); только если huggingface_hub даёт сбой",
+)
+def fetch_data_cmd(
+    repo_id: str,
+    filename: str,
+    revision: str,
+    output: Path | None,
+    extract_to: Path | None,
+    token_env: str,
+    token: str | None,
+    legacy_http: bool,
+):
+    """Скачать данные из Hugging Face Dataset repo (LFS через huggingface_hub)."""
+    out = Path(output) if output else Path(PurePosixPath(filename).name)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    token_val = (token or os.environ.get(token_env) or "").strip() or None
 
-    click.echo(f"Downloading {url}")
-    downloaded = _download_with_progress(url, out, token=token)
-    click.echo(f"Downloaded to {downloaded}")
+    hub_page = f"https://huggingface.co/datasets/{repo_id}/tree/{revision}"
+
+    if legacy_http:
+        filename_url = urllib.parse.quote(filename, safe="/")
+        revision_url = urllib.parse.quote(revision, safe="")
+        url = f"https://huggingface.co/datasets/{repo_id}/resolve/{revision_url}/{filename_url}"
+        click.echo(f"Downloading (legacy HTTP): {url}")
+        try:
+            downloaded = _download_with_progress(url, out, token=token_val)
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                raise click.ClickException(
+                    f"Hugging Face вернул HTTP {e.code}: для private Dataset нужен токен с правом Read.\n"
+                    "  • Задайте: export HF_TOKEN=hf_...\n"
+                    "  • Либо: ir-pipeline fetch-data ... --token hf_...\n"
+                    "  • Убедитесь, что аккаунт токена добавлен в collaborators этого Dataset repo.\n"
+                    "  • Проверьте имя файла и ветку (--revision).\n"
+                    "  • Для LFS-файлов не используйте --legacy-http."
+                ) from e
+            raise click.ClickException(f"HTTP {e.code}: {e.reason}") from e
+    else:
+        click.echo(f"Downloading via huggingface_hub: datasets/{repo_id} @ {revision} → {filename}")
+        try:
+            cached_path = Path(
+                hf_hub_download(
+                    repo_id=repo_id,
+                    repo_type="dataset",
+                    filename=filename,
+                    revision=revision,
+                    token=token_val if token_val else None,
+                )
+            )
+        except RepositoryNotFoundError as e:
+            raise click.ClickException(
+                f"Репозиторий datasets/{repo_id} не найден или недоступен: {e}\n"
+                f"  • Откройте {hub_page} и проверьте имя и видимость (Public)."
+            ) from e
+        except EntryNotFoundError as e:
+            raise click.ClickException(
+                f"Файл «{filename}» не найден в datasets/{repo_id}: {e}\n"
+                f"  • Загрузите архив на вкладке Files или поправьте --filename.\n"
+                f"  • Список файлов: {hub_page}"
+            ) from e
+        except HfHubHTTPError as e:
+            code = getattr(getattr(e, "response", None), "status_code", None)
+            if code in (401, 403):
+                raise click.ClickException(
+                    f"Hugging Face вернул HTTP {code}: нужен доступ и токен Read.\n"
+                    "  • export HF_TOKEN=hf_... или ir-pipeline fetch-data ... --token hf_...\n"
+                    "  • Для gated/private repo: аккаунт токена должен иметь доступ к datasets/{repo_id}.\n"
+                    f"  • Карточка репозитория: {hub_page}"
+                ) from e
+            raise click.ClickException(f"huggingface_hub: {e}") from e
+        except Exception as e:
+            raise click.ClickException(
+                f"{e}\nПодсказка: проверьте имя файла на вкладке Files: {hub_page}"
+            ) from e
+
+        if cached_path.resolve() != out.resolve():
+            shutil.copy2(cached_path, out)
+        downloaded = out
+        click.echo(f"Downloaded to {downloaded}")
 
     if extract_to is not None:
         if not zipfile.is_zipfile(downloaded):

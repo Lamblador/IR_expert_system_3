@@ -1,0 +1,5 @@
+# Пример после fetch-data с Lamblador/IRSpectra2 (без Google Drive).
+raw_jcamp_dir: downloaded_jcamp
+processed_root: data/processed
+dataset_version: dataset_mini
+bands_config: configs/bands_reference.yaml

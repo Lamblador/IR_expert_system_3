@@ -17,29 +17,54 @@ pip install -e ".[torch]"
 
 Большие артефакты (`data/processed/`, модели) не коммитьте; для Colab см. `configs/paths.colab.yaml`.
 
-Если Google Drive не подходит, загрузите данные в Hugging Face Dataset repo и скачивайте их командой:
+Публичный Dataset repo по умолчанию: [Lamblador/IRSpectra2](https://huggingface.co/datasets/Lamblador/IRSpectra2). Скачивание идёт через библиотеку `huggingface_hub` (в том числе LFS/GCS), без ручных прямых ссылок.
 
 ```bash
-# Raw JCAMP: архив должен распаковаться в ./downloaded_jcamp/
-ir-pipeline fetch-data --repo-id USER/ir-expert-data --filename downloaded_jcamp.zip --extract-to .
+# По умолчанию repo-id=Lamblador/IRSpectra2 (--repo-id можно не указывать).
 
-# Уже собранный датасет: архив должен распаковаться в ./data/processed/dataset_v001/
-ir-pipeline fetch-data --repo-id USER/ir-expert-data --filename dataset_v001.zip --extract-to data/processed
+# Мини-датасет для быстрой проверки Colab (~сотни спектров → архив должен содержать каталог dataset_mini/)
+ir-pipeline fetch-data --filename dataset_mini.zip --extract-to data/processed
+
+# Полный собранный датасет
+ir-pipeline fetch-data --filename dataset_v001.zip --extract-to data/processed
+
+# Сырые JCAMP → после распаковки должен появиться ./downloaded_jcamp/
+ir-pipeline fetch-data --filename downloaded_jcamp.zip --extract-to .
+```
+
+Google Colab (минимум):
+
+```python
+!pip install -e .
+# без токена, если репозиторий публичный:
+!ir-pipeline fetch-data --filename dataset_mini.zip --extract-to data/processed
+!ir-pipeline train --paths configs/paths.huggingface.yaml --mode spectrum --config configs/train_mini.yaml --run-dir runs/mini01
 ```
 
 Для private repo задайте токен в окружении:
 
 ```bash
-export HF_TOKEN=hf_...
+export HF_TOKEN=hf_...   # Settings → Access Tokens → Read
 # Windows PowerShell:
 $env:HF_TOKEN = "hf_..."
 ```
 
-Что загрузить на Hugging Face:
+В Colab:
 
-- `downloaded_jcamp.zip` — исходники для полной пересборки; внутри должен быть каталог `downloaded_jcamp/` с JCAMP-файлами (`*.jdx` или файлы без расширения с CAS-именами).
-- `dataset_v001.zip` — быстрый вариант для обучения без raw-файлов; внутри должен быть каталог `dataset_v001/` с `spectra.npz`, `meta.parquet`, `labels_spectrum.parquet`, `labels_structure.parquet`, `unresolved_structures.parquet`, `structure_cache.parquet`, `split.json`, `manifest.json`.
-- Опционально `lamblador_irspectra_structures.parquet` — seed-кэш структур из Lamblador; если не загрузить, пайплайн сам пересоберёт его из публичного источника.
+```python
+import os
+from google.colab import userdata  # или os.environ вручную
+os.environ["HF_TOKEN"] = userdata.get("HF_TOKEN")
+```
+
+Что выложить в файлы репозитория на Hugging Face (вкладка Files у Dataset):
+
+- `dataset_mini.zip` — для Colab/smoke: соберите локально `ir-pipeline build-dataset --max-files 300 --dataset-version dataset_mini ...`, затем из каталога `data/processed/` упакуйте **папку** `dataset_mini` в zip так, чтобы после распаковки в `data/processed` получилось `data/processed/dataset_mini/spectra.npz` и остальные parquet/json.
+- `dataset_v001.zip` — полный собранный датасет; внутри каталог `dataset_v001/` с теми же артефактами.
+- `downloaded_jcamp.zip` — только если нужна полная пересборка с нуля; внутри каталог `downloaded_jcamp/` с JCAMP (`*.jdx` или имена CAS без расширения).
+- Опционально отдельным файлом в корне repo или в zip: `lamblador_irspectra_structures.parquet` в `data/processed/` — иначе seed подтянется сам при первом `build-dataset`.
+
+Почему обучение sklearn на Colab кажется «очень медленным»: для режима `spectrum` обучается **отдельный RandomForest на каждую полосу** из меток (десятки моделей), каждая видит вектор признаков длины ~1801 (точки спектра) плюс категориальные признаки, деревьев по умолчанию много (`train_smoke.yaml`: 80+). GPU RandomForest не ускоряет — только CPU и `n_jobs`. Для быстрых прогонов используйте **`configs/train_mini.yaml`** и **`dataset_mini.zip`**.
 
 После `build-dataset` в `data/processed/<dataset_version>/` появляются:
 
@@ -60,10 +85,14 @@ ir-pipeline build-dataset --paths configs/paths.local.yaml --max-files 0
 # Быстрая проверка на подвыборке
 ir-pipeline build-dataset --paths configs/paths.local.yaml --max-files 100 --dataset-version dataset_smoke
 
-# Скачать данные из Hugging Face Dataset repo без Google Drive
-ir-pipeline fetch-data --repo-id USER/ir-expert-data --filename downloaded_jcamp.zip --extract-to .
+# Собрать мини-датасет локально и упаковать для загрузки на HF (пример)
+ir-pipeline build-dataset --paths configs/paths.local.yaml --max-files 300 --dataset-version dataset_mini
+
+# Скачать с HF (публичный repo по умолчанию)
+ir-pipeline fetch-data --filename dataset_mini.zip --extract-to data/processed
 
 # Обучение RandomForest (режим только спектр или спектр + SMARTS-маска)
+ir-pipeline train --paths configs/paths.huggingface.yaml --mode spectrum --config configs/train_mini.yaml --run-dir runs/mini01
 ir-pipeline train --paths configs/paths.local.yaml --dataset-version dataset_v001 --mode spectrum --config configs/train_smoke.yaml
 ir-pipeline train --paths configs/paths.local.yaml --dataset-version dataset_v001 --mode spectrum_structure --config configs/train_smoke.yaml
 
@@ -86,7 +115,8 @@ ir-pipeline predict ... --run-dir runs/<torch_run> --torch --output-dir reports/
 
 - `configs/paths.local.yaml` — локальные пути
 - `configs/paths.colab.yaml` — пример для Google Drive
-- `configs/train_smoke.yaml` / `configs/train_gpu.yaml` — параметры обучения
+- `configs/train_smoke.yaml` / `configs/train_gpu.yaml` / `configs/train_mini.yaml` — параметры обучения
+- `configs/paths.huggingface.yaml` — пути после `fetch-data` без Drive
 - `configs/bands_reference.yaml` — полосы (correlation charts + ru.wikipedia), диапазоны см⁻¹, SMARTS
 
 ## Лицензии данных

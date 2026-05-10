@@ -14,6 +14,7 @@ dependencies = [
     "pandas>=2.0",
     "pyarrow>=14.0",
     "pyyaml>=6.0",
+    "huggingface_hub>=0.23",
     "click>=8.1",
     "tqdm>=4.66",
     "jcamp>=1.2",
