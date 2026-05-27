@@ -1,0 +1,63 @@
+# Профили стадий пайплайна (ir-pipeline run)
+# paths: configs/paths.local.yaml | paths.huggingface.yaml | paths.colab.yaml
+
+defaults:
+  paths: configs/paths.huggingface.yaml
+  dataset_version: dataset_mini
+  train_config: configs/train_mini.yaml
+  train_config_torch: configs/train_mini.yaml
+  train_config_irresnet: configs/train_irresnet.yaml
+  peak_threshold: 0.1
+  hf_filename: dataset_mini.zip
+  hf_extract_to: data/processed
+
+stages:
+  fetch:
+    id: "01"
+    description: "Скачать датасет с Hugging Face"
+  dataset_build:
+    id: "02"
+    description: "Собрать датасет из JCAMP (локально)"
+  dataset_preview:
+    id: "03"
+    description: "Превью спектров и баланса классов"
+  train_rf:
+    id: "04"
+    description: "Обучение RandomForest baseline"
+  plot_rf_metrics:
+    id: "05"
+    description: "Графики MAE по полосам (RF)"
+  train_irresnet:
+    id: "06"
+    description: "Обучение IrResnet4 (multi-label, CAM-ready)"
+  cam_examples:
+    id: "07"
+    description: "Grad-CAM примеры"
+  evaluate_rf:
+    id: "08"
+    description: "Оценка RF на test split"
+  export_telegram:
+    id: "09"
+    description: "Экспорт модели в FTIR Telegram-бот"
+  predict_smoke:
+    id: "10"
+    description: "Smoke predict на одном JCAMP"
+
+profiles:
+  smoke:
+    - fetch
+    - dataset_preview
+    - train_rf
+    - plot_rf_metrics
+    - train_irresnet
+    - cam_examples
+    - export_telegram
+  full_local:
+    - dataset_build
+    - dataset_preview
+    - train_rf
+    - plot_rf_metrics
+    - train_irresnet
+    - cam_examples
+    - evaluate_rf
+    - export_telegram

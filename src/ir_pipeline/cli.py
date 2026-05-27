@@ -18,8 +18,12 @@ from ir_pipeline.config_loader import load_yaml, merge_train_defaults, resolve_p
 from ir_pipeline.dataset_build import build_dataset, resolve_missing_structures_for_dataset
 from ir_pipeline.evaluate import evaluate_run
 from ir_pipeline.train_sklearn import train_models
+from ir_pipeline.metrics_plot import plot_train_metrics
 from ir_pipeline.visualize import predict_file_visualize
 from ir_pipeline import torch_train as torch_train_mod
+from ir_pipeline.export_telegram import export_irresnet_to_bot
+from ir_pipeline import irresnet_train as irresnet_train_mod
+from ir_pipeline.stage_runner import list_profiles, list_stages, load_stages_config, run_profile, run_stage
 
 
 @click.group()
@@ -202,6 +206,56 @@ def build_dataset_cmd(
     click.echo(f"Dataset written to {out}")
 
 
+@main.command("build-mini-dataset")
+@click.option("--paths", type=click.Path(exists=True, path_type=Path), default=Path("configs/paths.local.yaml"))
+@click.option(
+    "--max-files",
+    type=int,
+    default=300,
+    show_default=True,
+    help="сколько JCAMP взять (мини-датасет для HF Colab / smoke)",
+)
+@click.option(
+    "--dataset-version",
+    type=str,
+    default="dataset_mini",
+    show_default=True,
+    help="имя каталога под processed_root",
+)
+@click.option("--pubchem-sleep", type=float, default=0.12)
+@click.option(
+    "--resolve-missing-structures",
+    is_flag=True,
+    help="медленный добор структур через PubChem (обычно mini собирают без этого)",
+)
+@click.option("--split-seed", type=int, default=42)
+@click.option("--train-frac", type=float, default=0.85)
+def build_mini_dataset_cmd(
+    paths: Path,
+    max_files: int,
+    dataset_version: str,
+    pubchem_sleep: float,
+    resolve_missing_structures: bool,
+    split_seed: int,
+    train_frac: float,
+):
+    """Собрать `dataset_mini` (~десятки–сотни спектров) для упаковки в zip и загрузки на Hugging Face."""
+    cfg = load_yaml(paths)
+    p = resolve_paths(cfg)
+    out = build_dataset(
+        raw_jcamp_dir=p["raw_jcamp_dir"],
+        processed_root=p["processed_root"],
+        dataset_version=dataset_version,
+        bands_yaml=p["bands_config"],
+        max_files=max_files,
+        pubchem_sleep_s=pubchem_sleep,
+        resolve_missing_structures=resolve_missing_structures,
+        split_seed=split_seed,
+        train_frac=train_frac,
+    )
+    click.echo(f"Mini dataset written to {out}")
+
+
 @main.command("resolve-missing-structures")
 @click.option("--paths", type=click.Path(exists=True, path_type=Path), default=Path("configs/paths.local.yaml"))
 @click.option("--dataset-version", type=str, default=None)
@@ -251,6 +305,16 @@ def train_cmd(paths: Path, dataset_version: str | None, config: Path, mode: str,
         train_frac=float(train_cfg["train_frac"]),
     )
     click.echo(f"Training finished. Run dir: {rd}\nMetrics: {metrics}")
+
+
+@main.command("plot-train-metrics")
+@click.option("--run-dir", type=click.Path(exists=True, path_type=Path), required=True)
+@click.option("--bands", type=click.Path(exists=True, path_type=Path), default=Path("configs/bands_reference.yaml"))
+@click.option("--output-dir", type=click.Path(path_type=Path), default=None)
+def plot_train_metrics_cmd(run_dir: Path, bands: Path, output_dir: Path | None):
+    """PNG из metrics.json: MAE по полосам и среднее MAE по группам справочника bands_reference."""
+    p1, p2 = plot_train_metrics(run_dir=run_dir, bands_yaml=bands, output_dir=output_dir)
+    click.echo(f"Written:\n  {p1}\n  {p2}")
 
 
 @main.command("evaluate")
@@ -332,6 +396,144 @@ def torch_train_cmd(
         device=device,
     )
     click.echo(f"Torch training done → {rd}\n{summary}")
+
+
+@main.command("irresnet-train")
+@click.option("--paths", type=click.Path(exists=True, path_type=Path), default=Path("configs/paths.local.yaml"))
+@click.option("--dataset-version", type=str, default=None)
+@click.option("--config", type=click.Path(exists=True, path_type=Path), default=Path("configs/train_irresnet.yaml"))
+@click.option("--run-dir", type=click.Path(path_type=Path), default=None)
+@click.option("--device", type=str, default=None)
+@click.option(
+    "--label-schema",
+    type=click.Choice(["spectrum", "structure"]),
+    default="spectrum",
+    show_default=True,
+)
+def irresnet_train_cmd(
+    paths: Path,
+    dataset_version: str | None,
+    config: Path,
+    run_dir: Path | None,
+    device: str | None,
+    label_schema: str,
+):
+    """IrResnet4 multi-label (формат Telegram-бота, 3 канала)."""
+    if not irresnet_train_mod.is_torch_available():
+        raise click.ClickException("Установите torch: pip install -e '.[torch]'")
+    paths_cfg = load_yaml(paths)
+    p = resolve_paths(paths_cfg)
+    dv = dataset_version or str(p["dataset_version"])
+    ds_dir = p["processed_root"] / dv
+    if not ds_dir.exists():
+        raise click.ClickException(f"Нет датасета {ds_dir}")
+    train_cfg = merge_train_defaults(load_yaml(config))
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    rd = run_dir or Path("runs") / f"irresnet_{ts}"
+    summary = irresnet_train_mod.train_irresnet_run(
+        dataset_dir=ds_dir,
+        run_dir=rd,
+        bands_yaml=p["bands_config"],
+        train_cfg=train_cfg,
+        device=device,
+        label_schema=label_schema,
+    )
+    click.echo(f"IrResnet training done → {rd}\n{summary}")
+
+
+@main.command("cam-examples")
+@click.option("--paths", type=click.Path(exists=True, path_type=Path), default=Path("configs/paths.local.yaml"))
+@click.option("--dataset-version", type=str, default=None)
+@click.option("--run-dir", type=click.Path(exists=True, path_type=Path), required=True, help="каталог с irresnet_bundle.pt")
+@click.option("--output-dir", type=click.Path(path_type=Path), default=Path("reports/cam"))
+@click.option("--n-examples", type=int, default=3)
+def cam_examples_cmd(paths: Path, dataset_version: str | None, run_dir: Path, output_dir: Path, n_examples: int):
+    """Grad-CAM примеры для обученной IrResnet4."""
+    from ir_pipeline.gradcam import run_cam_examples
+
+    paths_cfg = load_yaml(paths)
+    p = resolve_paths(paths_cfg)
+    dv = dataset_version or str(p["dataset_version"])
+    ds_dir = p["processed_root"] / dv
+    bundle = run_dir / "irresnet_bundle.pt"
+    if not bundle.exists():
+        raise click.ClickException(f"Нет {bundle}")
+    paths_out = run_cam_examples(bundle, ds_dir, output_dir, n_examples=n_examples)
+    click.echo("Written:\n" + "\n".join(str(x) for x in paths_out))
+
+
+@main.command("export-telegram")
+@click.option("--run-dir", type=click.Path(exists=True, path_type=Path), required=True)
+@click.option(
+    "--target-dir",
+    type=click.Path(path_type=Path),
+    default=Path(r"D:\Programming\Python\FTIR_telegram_bot\models"),
+    show_default=True,
+)
+@click.option("--model-version", type=str, default=None)
+def export_telegram_cmd(run_dir: Path, target_dir: Path, model_version: str | None):
+    """Экспорт IrResnet4 в каталог моделей FTIR Telegram-бота."""
+    out = export_irresnet_to_bot(run_dir, target_dir, model_version=model_version)
+    click.echo(f"Exported to {out}")
+
+
+@main.group("run")
+def run_group():
+    """Именованные стадии пайплайна (оркестратор)."""
+
+
+@run_group.command("stage")
+@click.argument("stage_name")
+@click.option("--stages", "stages_yaml", type=click.Path(exists=True, path_type=Path), default=Path("configs/stages.yaml"))
+@click.option("--paths", type=click.Path(exists=True, path_type=Path), default=Path("configs/paths.huggingface.yaml"))
+@click.option("--pipeline-run", type=click.Path(path_type=Path), default=None)
+@click.option("--dataset-version", type=str, default=None)
+def run_stage_cmd(stage_name: str, stages_yaml: Path, paths: Path, pipeline_run: Path | None, dataset_version: str | None):
+    """Выполнить одну стадию, напр. `ir-pipeline run stage dataset_preview`."""
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    pr = pipeline_run or Path("runs") / f"pipeline_stage_{stage_name}_{ts}"
+    overrides = {"dataset_version": dataset_version} if dataset_version else None
+    out = run_stage(stage_name, stages_yaml=stages_yaml, paths_yaml=paths, pipeline_run=pr, overrides=overrides)
+    click.echo(f"Stage done: {out}")
+
+
+@run_group.command("profile")
+@click.argument("profile_name")
+@click.option("--stages", "stages_yaml", type=click.Path(exists=True, path_type=Path), default=Path("configs/stages.yaml"))
+@click.option("--paths", type=click.Path(exists=True, path_type=Path), default=Path("configs/paths.huggingface.yaml"))
+@click.option("--pipeline-run", type=click.Path(path_type=Path), default=None)
+@click.option("--dataset-version", type=str, default=None)
+def run_profile_cmd(
+    profile_name: str,
+    stages_yaml: Path,
+    paths: Path,
+    pipeline_run: Path | None,
+    dataset_version: str | None,
+):
+    """Выполнить профиль стадий, напр. `ir-pipeline run profile smoke`."""
+    overrides = {"dataset_version": dataset_version} if dataset_version else None
+    pr = run_profile(
+        profile_name,
+        stages_yaml=stages_yaml,
+        paths_yaml=paths,
+        pipeline_run=pipeline_run,
+        overrides=overrides,
+    )
+    click.echo(f"Profile complete: {pr}")
+
+
+@run_group.command("list")
+@click.option("--stages", "stages_yaml", type=click.Path(exists=True, path_type=Path), default=Path("configs/stages.yaml"))
+def run_list_cmd(stages_yaml: Path):
+    """Список стадий и профилей."""
+    cfg = load_stages_config(stages_yaml)
+    click.echo("Stages:")
+    for k in list_stages(cfg):
+        desc = (cfg.get("stages") or {}).get(k, {}).get("description", "")
+        click.echo(f"  {k}: {desc}")
+    click.echo("Profiles:")
+    for p in list_profiles(cfg):
+        click.echo(f"  {p}: {(cfg.get('profiles') or {}).get(p)}")
 
 
 if __name__ == "__main__":

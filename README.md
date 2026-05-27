@@ -70,7 +70,7 @@ os.environ["HF_TOKEN"] = userdata.get("HF_TOKEN")
 
 Что выложить в файлы репозитория на Hugging Face (вкладка Files у Dataset):
 
-- `dataset_mini.zip` — для Colab/smoke: соберите локально `ir-pipeline build-dataset --max-files 300 --dataset-version dataset_mini ...`, затем из каталога `data/processed/` упакуйте **папку** `dataset_mini` в zip так, чтобы после распаковки в `data/processed` получилось `data/processed/dataset_mini/spectra.npz` и остальные parquet/json.
+- `dataset_mini.zip` — для Colab/smoke: локально `ir-pipeline build-mini-dataset --paths configs/paths.local.yaml` (это то же самое, что `build-dataset --max-files 300 --dataset-version dataset_mini`). Из `data/processed/` упакуйте **папку** `dataset_mini` в zip так, чтобы после распаковки в `data/processed` получилось `data/processed/dataset_mini/spectra.npz` и остальные parquet/json.
 - `dataset_v001.zip` — полный собранный датасет; внутри каталог `dataset_v001/` с теми же артефактами.
 - `downloaded_jcamp.zip` — только если нужна полная пересборка с нуля; внутри каталог `downloaded_jcamp/` с JCAMP (`*.jdx` или имена CAS без расширения).
 - Опционально отдельным файлом в корне repo или в zip: `lamblador_irspectra_structures.parquet` в `data/processed/` — иначе seed подтянется сам при первом `build-dataset`.
@@ -85,6 +85,23 @@ os.environ["HF_TOKEN"] = userdata.get("HF_TOKEN")
 - `meta.parquet`, `labels_spectrum.parquet`, `labels_structure.parquet`, `unresolved_structures.parquet`
 - `structure_cache.parquet`, `split.json` (фиксированное разбиение для обучения/валидации), `manifest.json`
 
+## Этапы пайплайна (оркестратор)
+
+См. [`docs/PIPELINE.md`](docs/PIPELINE.md) и [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+```bash
+# Список стадий и профилей
+ir-pipeline run list
+
+# Colab / smoke: HF mini-dataset → RF → IrResnet4 → CAM → export в бот
+ir-pipeline run profile smoke --paths configs/paths.huggingface.yaml
+
+# Одна стадия
+ir-pipeline run stage dataset_preview --paths configs/paths.local.yaml
+```
+
+Colab: поэтапные ноутбуки в [`notebooks/`](notebooks/) (`colab_00_setup` … `colab_05_export_telegram`).
+
 ## Команды
 
 ```bash
@@ -98,11 +115,14 @@ ir-pipeline build-dataset --paths configs/paths.local.yaml --max-files 0
 # Быстрая проверка на подвыборке
 ir-pipeline build-dataset --paths configs/paths.local.yaml --max-files 100 --dataset-version dataset_smoke
 
-# Собрать мини-датасет локально и упаковать для загрузки на HF (пример)
-ir-pipeline build-dataset --paths configs/paths.local.yaml --max-files 300 --dataset-version dataset_mini
+# Мини-датасет для HF / Colab (по умолчанию 300 файлов → dataset_mini/)
+ir-pipeline build-mini-dataset --paths configs/paths.local.yaml
 
 # Скачать с HF (публичный repo по умолчанию)
 ir-pipeline fetch-data --filename dataset_mini.zip --extract-to data/processed
+
+# Графики MAE из runs/.../metrics.json (по полосам и по функциональной группе из bands_reference)
+ir-pipeline plot-train-metrics --run-dir runs/colab_cpu_rf
 
 # Обучение RandomForest (режим только спектр или спектр + SMARTS-маска)
 ir-pipeline train --paths configs/paths.huggingface.yaml --mode spectrum --config configs/train_mini.yaml --run-dir runs/mini01
@@ -120,6 +140,11 @@ ir-pipeline torch-train --paths configs/paths.local.yaml --dataset-version datas
 # → torch_bundle.pt, torch_training_curve.png, torch_history.json
 
 ir-pipeline predict ... --run-dir runs/<torch_run> --torch --output-dir reports/out_torch
+
+# IrResnet4 multi-label (формат FTIR Telegram-бота, Grad-CAM)
+ir-pipeline irresnet-train --paths configs/paths.local.yaml --dataset-version dataset_mini --config configs/train_irresnet.yaml
+ir-pipeline cam-examples --paths configs/paths.local.yaml --run-dir runs/<irresnet_run>
+ir-pipeline export-telegram --run-dir runs/<irresnet_run> --target-dir "D:/Programming/Python/FTIR_telegram_bot/models"
 ```
 
 Справочник [`configs/bands_reference.yaml`](configs/bands_reference.yaml) дополнен строками по таблице Википедии «[Таблица характеристических частот в инфракрасной спектроскопии](https://ru.wikipedia.org/wiki/Таблица_характеристических_частот_в_инфракрасной_спектроскопии)» (`source: ru.wikipedia IR table`); скорректированы интервалы для `ch_sp3`, замечания для `nh_stretch`.
