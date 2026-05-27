@@ -44,7 +44,11 @@ def bootstrap_cell(extra: str = "") -> dict:
         "    subprocess.run([\"git\", \"clone\", REPO_URL, str(REPO_DIR)], check=True)\n\n"
         "%cd IR_expert_system_3\n"
         "!pip install -q -e \".[torch]\"\n"
-        "!ir-pipeline run list\n"
+        "!ir-pipeline --help\n"
+        "import subprocess\n"
+        "help_txt = subprocess.check_output(['ir-pipeline', '--help'], text=True)\n"
+        "if ' run ' not in help_txt:\n"
+        "    print('WARNING: команда `run` отсутствует. Ноутбук использует fallback без run-stage.')\n"
     )
     if extra:
         src += "\n" + extra + "\n"
@@ -60,6 +64,42 @@ def ensure_data_cell() -> dict:
         "    !ir-pipeline fetch-data --filename dataset_mini.zip --extract-to data/processed\n"
         "else:\n"
         "    print(f'{DATASET_DIR} already exists')\n"
+    )
+
+
+def find_jcamp_or_zip_cell() -> dict:
+    return code(
+        "from pathlib import Path\n"
+        "import zipfile, shutil\n\n"
+        "SEARCH_ROOTS = [Path('/content'), Path('/content/IR_expert_system_3'), Path('/content/drive/MyDrive')]\n"
+        "candidates = []\n"
+        "for root in SEARCH_ROOTS:\n"
+        "    if not root.exists():\n"
+        "        continue\n"
+        "    for p in root.rglob('*'):\n"
+        "        name = p.name.lower()\n"
+        "        if p.is_dir() and name == 'downloaded_jcamp':\n"
+        "            candidates.append(('dir', p))\n"
+        "        if p.is_file() and ('downloaded_jcamp' in name and name.endswith('.zip')):\n"
+        "            candidates.append(('zip', p))\n\n"
+        "print('Found candidates:')\n"
+        "for k, p in candidates[:30]:\n"
+        "    print(k, p)\n\n"
+        "target = Path('/content/IR_expert_system_3/downloaded_jcamp')\n"
+        "target.parent.mkdir(parents=True, exist_ok=True)\n"
+        "if not target.exists():\n"
+        "    for kind, p in candidates:\n"
+        "        if kind == 'dir':\n"
+        "            print('Copying directory to', target)\n"
+        "            shutil.copytree(p, target, dirs_exist_ok=True)\n"
+        "            break\n"
+        "        if kind == 'zip':\n"
+        "            print('Extracting zip to', target)\n"
+        "            target.mkdir(parents=True, exist_ok=True)\n"
+        "            with zipfile.ZipFile(p) as zf:\n"
+        "                zf.extractall(target)\n"
+        "            break\n"
+        "print('downloaded_jcamp exists:', target.exists())\n"
     )
 
 
@@ -80,9 +120,13 @@ NOTEBOOKS = {
         bootstrap_cell(),
         ensure_data_cell(),
         code(
-            "from pathlib import Path\nfrom IPython.display import Image, display\n\n"
-            "PIPELINE_RUN = Path('runs/colab_pipeline_dataset')\n"
-            "!ir-pipeline run stage dataset_preview --paths configs/paths.huggingface.yaml --pipeline-run {PIPELINE_RUN}\n"
+            "from pathlib import Path\nfrom IPython.display import Image, display\n"
+            "from ir_pipeline.dataset_telegram import build_telegram_arrays_from_npz, plot_dataset_preview, save_telegram_npz\n\n"
+            "DATASET_DIR = Path('data/processed/dataset_mini')\n"
+            "if not (DATASET_DIR / 'telegram_arrays.npz').exists():\n"
+            "    X_bot, ids = build_telegram_arrays_from_npz(DATASET_DIR)\n"
+            "    save_telegram_npz(DATASET_DIR, X_bot, ids)\n"
+            "plot_dataset_preview(DATASET_DIR, Path('runs/colab_preview/plots'), Path('configs/bands_reference.yaml'))\n"
             "plots = sorted(Path('runs').rglob('preview_spectrum_0.png'))\n"
             "if plots:\n"
             "    display(Image(filename=str(plots[-1]), width=900))\n"
@@ -97,14 +141,15 @@ NOTEBOOKS = {
         ),
         bootstrap_cell(),
         ensure_data_cell(),
+        find_jcamp_or_zip_cell(),
         code(
             "from pathlib import Path\nfrom IPython.display import Image, display\n\n"
-            "PIPELINE_RUN = Path('runs/colab_pipeline_rf')\n"
+            "RUN_DIR = Path('runs/colab_pipeline_rf/rf_run')\n"
             "# GPU (опционально):\n"
             "# !pip install -q -e \".[cuml]\"\n"
             "# import os; os.environ['IR_RF_BACKEND'] = 'cuml'\n\n"
-            "!ir-pipeline run stage train_rf --paths configs/paths.huggingface.yaml --pipeline-run {PIPELINE_RUN}\n"
-            "!ir-pipeline run stage plot_rf_metrics --paths configs/paths.huggingface.yaml --pipeline-run {PIPELINE_RUN}\n\n"
+            "!ir-pipeline train --paths configs/paths.huggingface.yaml --dataset-version dataset_mini --mode spectrum --config configs/train_mini.yaml --run-dir {RUN_DIR}\n"
+            "!ir-pipeline plot-train-metrics --run-dir {RUN_DIR}\n\n"
             "for pat in ['metrics_per_band_mae.png', 'metrics_by_group_mae.png']:\n"
             "    hits = sorted(Path('runs').rglob(pat))\n"
             "    if hits:\n"
@@ -121,8 +166,8 @@ NOTEBOOKS = {
         ensure_data_cell(),
         code(
             "from pathlib import Path\nfrom IPython.display import Image, display\n\n"
-            "PIPELINE_RUN = Path('runs/colab_pipeline_irresnet')\n"
-            "!ir-pipeline run stage train_irresnet --paths configs/paths.huggingface.yaml --pipeline-run {PIPELINE_RUN}\n\n"
+            "RUN_DIR = Path('runs/colab_pipeline_irresnet/irresnet_run')\n"
+            "!ir-pipeline irresnet-train --paths configs/paths.huggingface.yaml --dataset-version dataset_mini --config configs/train_irresnet.yaml --run-dir {RUN_DIR}\n\n"
             "hits = sorted(Path('runs').rglob('irresnet_training_curve.png'))\n"
             "if hits:\n"
             "    display(Image(filename=str(hits[-1]), width=900))\n"
@@ -141,7 +186,7 @@ NOTEBOOKS = {
             "bundles = sorted(Path('runs').rglob('irresnet_bundle.pt'))\n"
             "if not bundles:\n"
             "    print('No irresnet bundle found, training one...')\n"
-            "    !ir-pipeline run stage train_irresnet --paths configs/paths.huggingface.yaml --pipeline-run {PIPELINE_RUN}\n"
+            "    !ir-pipeline irresnet-train --paths configs/paths.huggingface.yaml --dataset-version dataset_mini --config configs/train_irresnet.yaml --run-dir {PIPELINE_RUN / 'irresnet_run'}\n"
             "    bundles = sorted(Path('runs').rglob('irresnet_bundle.pt'))\n\n"
             "IR_RUN = bundles[-1].parent\n"
             "print('Using', IR_RUN)\n"
@@ -162,7 +207,7 @@ NOTEBOOKS = {
             "bundles = sorted(Path('runs').rglob('irresnet_bundle.pt'))\n"
             "if not bundles:\n"
             "    print('No irresnet bundle found, training one...')\n"
-            "    !ir-pipeline run stage train_irresnet --paths configs/paths.huggingface.yaml --pipeline-run runs/colab_pipeline_export\n"
+            "    !ir-pipeline irresnet-train --paths configs/paths.huggingface.yaml --dataset-version dataset_mini --config configs/train_irresnet.yaml --run-dir runs/colab_pipeline_export/irresnet_run\n"
             "    bundles = sorted(Path('runs').rglob('irresnet_bundle.pt'))\n\n"
             "IR_RUN = bundles[-1].parent\n"
             "TARGET = Path('/content/drive/MyDrive/ftir_bot_models')  # поправьте под свой путь\n"
