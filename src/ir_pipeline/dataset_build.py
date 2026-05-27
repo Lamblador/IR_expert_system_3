@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,57 @@ def iter_jcamp_files(raw_dir: Path, max_files: int) -> list[Path]:
     return paths
 
 
+def _try_resolve_jcamp_dir_from_zip(raw_dir: Path) -> Path:
+    """
+    Если raw_dir не существует, пытается найти downloaded_jcamp*.zip рядом и распаковать.
+    Возвращает путь к каталогу с JCAMP.
+    """
+    if raw_dir.exists():
+        return raw_dir
+
+    search_roots: list[Path] = []
+    if raw_dir.parent:
+        search_roots.append(raw_dir.parent)
+    search_roots.extend([Path.cwd(), Path.cwd().parent])
+
+    seen: set[Path] = set()
+    zip_candidates: list[Path] = []
+    for root in search_roots:
+        rp = root.resolve()
+        if rp in seen or not root.exists():
+            continue
+        seen.add(rp)
+        for z in root.glob("**/downloaded_jcamp*.zip"):
+            if z.is_file():
+                zip_candidates.append(z)
+
+    if not zip_candidates:
+        raise FileNotFoundError(f"Нет каталога JCAMP: {raw_dir}")
+
+    zip_candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    _event(f"zip fallback candidates found: {len(zip_candidates)}")
+    for z in zip_candidates[:20]:
+        st = z.stat()
+        mod = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        _event(f"zip candidate: path={z} | mtime={mod} | size_bytes={st.st_size}")
+    if len(zip_candidates) > 20:
+        _event(f"zip candidates truncated in log: shown=20, total={len(zip_candidates)}")
+
+    chosen_zip = zip_candidates[0]
+    _event(f"raw_jcamp_dir not found; using zip fallback: {chosen_zip}")
+
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(chosen_zip) as zf:
+        zf.extractall(raw_dir)
+
+    nested = raw_dir / "downloaded_jcamp"
+    if nested.is_dir():
+        _event(f"zip extracted nested folder, using: {nested}")
+        return nested
+
+    return raw_dir
+
+
 def build_dataset(
     raw_jcamp_dir: Path,
     processed_root: Path,
@@ -89,10 +141,11 @@ def build_dataset(
         seeded_structures = 0
         _event(f"Lamblador/IRSpectra seed skipped: {e}")
 
-    files = iter_jcamp_files(raw_jcamp_dir, max_files)
+    raw_jcamp_dir_resolved = _try_resolve_jcamp_dir_from_zip(raw_jcamp_dir)
+    files = iter_jcamp_files(raw_jcamp_dir_resolved, max_files)
     if not files:
-        raise RuntimeError(f"Не найдено JCAMP файлов в {raw_jcamp_dir}")
-    _event(f"JCAMP files selected: {len(files)} from {raw_jcamp_dir}")
+        raise RuntimeError(f"Не найдено JCAMP файлов в {raw_jcamp_dir_resolved}")
+    _event(f"JCAMP files selected: {len(files)} from {raw_jcamp_dir_resolved}")
     if resolve_missing_structures:
         _event("slow structure resolution enabled: PubChem may be called for cache misses")
     else:
@@ -274,7 +327,7 @@ def build_dataset(
     manifest = {
         "dataset_version": dataset_version,
         "created_utc": datetime.now(timezone.utc).isoformat(),
-        "raw_jcamp_dir": str(raw_jcamp_dir.resolve()),
+        "raw_jcamp_dir": str(raw_jcamp_dir_resolved.resolve()),
         "n_files_seen": len(files),
         "n_spectra_ok": int(len(spectrum_ids)),
         "qc_failed": qc_failed,
