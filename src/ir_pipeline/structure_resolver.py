@@ -16,6 +16,37 @@ from tqdm import tqdm
 UA = "ir-pipeline/0.1 (research)"
 LAMBLADOR_IRSPECTRA_URL = "https://raw.githubusercontent.com/Lamblador/IR_expert_system_2/main/expanded_df.pkl"
 LAMBLADOR_SEED_CACHE_NAME = "lamblador_irspectra_structures.parquet"
+LOCAL_TITLE_SMILES: dict[str, str] = {
+    "ndcl3 6h2o": "O.O.O.O.O.O.[Cl-].[Cl-].[Cl-].[Nd+3]",
+    "ndcl3 xh2o": "[Cl-].[Cl-].[Cl-].[Nd+3]",
+    "nd2(co3)3": "[O-]C([O-])=O.[O-]C([O-])=O.[O-]C([O-])=O.[Nd+3].[Nd+3]",
+    "nd sulfuricum": "[O-]S(=O)(=O)[O-].[O-]S(=O)(=O)[O-].[O-]S(=O)(=O)[O-].[Nd+3].[Nd+3]",
+    "pr(tfacet)3 nh2o": "CC(=O)C([O-])=C(C)C.CC(=O)C([O-])=C(C)C.CC(=O)C([O-])=C(C)C.[Pr+3]",
+    "gd(no3)3 8h2o": "O.O.O.O.O.O.O.O.[O-][N+](=O)[O-].[O-][N+](=O)[O-].[O-][N+](=O)[O-].[Gd+3]",
+    "dy(no3)3 4h2o": "O.O.O.O.[O-][N+](=O)[O-].[O-][N+](=O)[O-].[O-][N+](=O)[O-].[Dy+3]",
+    "y2(co3)3 3h2o": "O.O.O.[O-]C([O-])=O.[O-]C([O-])=O.[O-]C([O-])=O.[Y+3].[Y+3]",
+    "y(no3)3 6h2o": "O.O.O.O.O.O.[O-][N+](=O)[O-].[O-][N+](=O)[O-].[O-][N+](=O)[O-].[Y+3]",
+    "ycl3 6h2o": "O.O.O.O.O.O.[Cl-].[Cl-].[Cl-].[Y+3]",
+    "lu(no3)3 4h2o": "O.O.O.O.[O-][N+](=O)[O-].[O-][N+](=O)[O-].[O-][N+](=O)[O-].[Lu+3]",
+    "lucl3 6h2o": "O.O.O.O.O.O.[Cl-].[Cl-].[Cl-].[Lu+3]",
+    "lucl3 xh2o": "[Cl-].[Cl-].[Cl-].[Lu+3]",
+    "smcl3": "[Cl-].[Cl-].[Cl-].[Sm+3]",
+    "sm(no3)3 nh2o": "[O-][N+](=O)[O-].[O-][N+](=O)[O-].[O-][N+](=O)[O-].[Sm+3]",
+    "y(thd)3 h2o": "CC(=O)C([O-])=C(C(C)C)C(C)C.CC(=O)C([O-])=C(C(C)C)C(C)C.CC(=O)C([O-])=C(C(C)C)C(C)C.[Y+3]",
+    "gd2(co3)3 nh2o": "[O-]C([O-])=O.[O-]C([O-])=O.[O-]C([O-])=O.[Gd+3].[Gd+3]",
+    "ercl3 6h2o": "O.O.O.O.O.O.[Cl-].[Cl-].[Cl-].[Er+3]",
+    "la(ac)3": "CC(=O)[O-].CC(=O)[O-].CC(=O)[O-].[La+3]",
+    "la2(co3)3": "[O-]C([O-])=O.[O-]C([O-])=O.[O-]C([O-])=O.[La+3].[La+3]",
+    "tb2(so4)3 8h2o": "O.O.O.O.O.O.O.O.[O-]S(=O)(=O)[O-].[O-]S(=O)(=O)[O-].[O-]S(=O)(=O)[O-].[Tb+3].[Tb+3]",
+    "tb2(co3)3 3h2o": "O.O.O.[O-]C([O-])=O.[O-]C([O-])=O.[O-]C([O-])=O.[Tb+3].[Tb+3]",
+    "tb(naf)3 nh2o": "FC(C([O-])=O)(F)C(F)(F)F.FC(C([O-])=O)(F)C(F)(F)F.FC(C([O-])=O)(F)C(F)(F)F.[Tb+3]",
+    "pr2(co3)3": "[O-]C([O-])=O.[O-]C([O-])=O.[O-]C([O-])=O.[Pr+3].[Pr+3]",
+    "pracet3 1h2o": "O.CC(=O)[O-].CC(=O)[O-].CC(=O)[O-].[Pr+3]",
+    "sm(no3)3 6h2o": "O.O.O.O.O.O.[O-][N+](=O)[O-].[O-][N+](=O)[O-].[O-][N+](=O)[O-].[Sm+3]",
+    "smacet3 6.5h2o": "CC(=O)[O-].CC(=O)[O-].CC(=O)[O-].[Sm+3]",
+    "nd(no3)3 6h2o": "O.O.O.O.O.O.[O-][N+](=O)[O-].[O-][N+](=O)[O-].[O-][N+](=O)[O-].[Nd+3]",
+    "nd2(so4)3 8h2o": "O.O.O.O.O.O.O.O.[O-]S(=O)(=O)[O-].[O-]S(=O)(=O)[O-].[O-]S(=O)(=O)[O-].[Nd+3].[Nd+3]",
+}
 
 
 def structure_cache_path(processed_root: Path, dataset_version: str) -> Path:
@@ -31,11 +62,11 @@ def load_structure_cache(path: Path) -> dict[str, dict[str, Any]]:
     for row in tqdm(records, total=len(records), desc="Load structure cache", unit="row"):
         key = str(row["lookup_key"])
         out[key] = {
-            "smiles": row.get("smiles"),
-            "inchi": row.get("inchi"),
-            "inchikey": row.get("inchikey"),
-            "source": row.get("source"),
-            "error": row.get("error"),
+            "smiles": _safe_text(row.get("smiles")),
+            "inchi": _safe_text(row.get("inchi")),
+            "inchikey": _safe_text(row.get("inchikey")),
+            "source": _safe_text(row.get("source")),
+            "error": _safe_text(row.get("error")),
         }
     return out
 
@@ -153,11 +184,28 @@ def _first_text(*values: Any) -> str | None:
     return None
 
 
+def _safe_text(value: Any) -> str | None:
+    """
+    Нормализует значение из parquet/cache в строку или None.
+    Защищает от float/NaN и других неожиданных типов.
+    """
+    return _first_text(value)
+
+
 def _name_lookup_key(value: Any) -> str | None:
     name = _first_text(value)
     if not name or len(name) < 4:
         return None
     return f"name:{name[:220].casefold()}"
+
+
+def _normalize_title_for_local_lookup(value: str) -> str:
+    t = value.casefold().replace("_", " ")
+    t = re.sub(r"^\d+\s*", "", t)
+    t = t.replace("h2o)", "h2o")
+    t = re.sub(r"[^a-z0-9()+. ]+", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
 
 
 def _resolution_from_identifiers(smiles: Any, inchi: Any, source: str) -> dict[str, Any]:
@@ -347,6 +395,15 @@ def resolve_structure_for_record(
             return cache[ck]
 
     if tit and len(tit) >= 4:
+        local_key = _normalize_title_for_local_lookup(tit)
+        local_smiles = LOCAL_TITLE_SMILES.get(local_key)
+        if local_smiles:
+            local_res = _resolution_from_identifiers(local_smiles, None, "local_title_map")
+            if local_res.get("smiles"):
+                nk = _name_lookup_key(tit)
+                if nk:
+                    cache[nk] = local_res
+                return local_res
         nk = _name_lookup_key(tit)
         if nk is None:
             return {"smiles": None, "inchi": None, "inchikey": None, "source": None, "error": "title_too_short"}
@@ -371,7 +428,7 @@ def resolve_structure_for_record(
 
 
 def mol_from_resolution(res: dict[str, Any]) -> Chem.Mol | None:
-    sm = res.get("smiles")
+    sm = _safe_text(res.get("smiles"))
     if not sm:
         return None
     with rdBase.BlockLogs():

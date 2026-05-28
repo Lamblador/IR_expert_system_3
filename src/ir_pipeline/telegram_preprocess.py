@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.interpolate import interp1d
+
+from ir_pipeline.preprocess import ensure_absorbance, validate_absorbance_spectrum
 
 try:
     import peakutils
@@ -24,16 +26,19 @@ class TelegramSpectrum:
     absorption: np.ndarray  # (L,)
     peaks: np.ndarray  # (L,) mask 0..1
     tensor_3ch: np.ndarray  # (3, L)
+    scale_meta: dict[str, object] = field(default_factory=dict)
 
 
-def convert_to_absorption_bot(values: np.ndarray) -> np.ndarray:
-    """Как в FTIR_telegram_bot/processing_ftir_spectrum.convert_to_absorption."""
-    v = np.asarray(values, dtype=np.float64)
-    if np.all(v >= 0) and np.all(v <= 1):
-        return 1.0 - v
-    if np.all(v >= 0) and np.all(v <= 100):
-        return 1.0 - v / 100.0
-    return v
+def convert_to_absorption_bot(
+    values: np.ndarray,
+    yunits: str | None = None,
+    *,
+    already_absorbance: bool = False,
+) -> tuple[np.ndarray, dict[str, object]]:
+    """Поглощение для бота: -log10(T), без ошибочного (1 - T)."""
+    if already_absorbance:
+        return ensure_absorbance(values, assumed_scale="absorbance")
+    return ensure_absorbance(values, yunits=yunits)
 
 
 def interpolate_bot_grid(wavenumber: np.ndarray, absorption: np.ndarray) -> np.ndarray:
@@ -77,12 +82,26 @@ def jcamp_xy_to_telegram(
     x_cm: np.ndarray,
     y_raw: np.ndarray,
     *,
+    yunits: str | None = None,
+    already_absorbance: bool = False,
     peak_threshold: float = 0.1,
 ) -> TelegramSpectrum:
-    """x_cm — см⁻¹, y_raw — как в JCAMP (transmittance/absorbance)."""
-    ab = convert_to_absorption_bot(y_raw)
+    """x_cm — см⁻¹, y_raw — сырые или уже поглощение-подобные значения."""
+    ab, scale_meta = convert_to_absorption_bot(
+        y_raw,
+        yunits,
+        already_absorbance=already_absorbance,
+    )
     interp = interpolate_bot_grid(x_cm, ab)
+    qc = validate_absorbance_spectrum(interp)
+    scale_meta = {**scale_meta, "absorbance_qc": qc}
     pk = detect_peaks_bot(interp, threshold=peak_threshold)
     wn = BOT_WAVENUMBERS.copy()
     tensor = np.vstack([wn, interp, pk]).astype(np.float32)
-    return TelegramSpectrum(wavenumbers=wn, absorption=interp, peaks=pk, tensor_3ch=tensor)
+    return TelegramSpectrum(
+        wavenumbers=wn,
+        absorption=interp,
+        peaks=pk,
+        tensor_3ch=tensor,
+        scale_meta=scale_meta,
+    )

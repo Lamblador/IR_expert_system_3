@@ -24,7 +24,9 @@ def _try_import_jcamp():
 
 
 def read_jcamp_dict(path: Path) -> dict[str, Any]:
-    """Читает JCAMP-DX через пакет jcamp (readfile)."""
+    """Читает JCAMP-DX через пакет jcamp или PerkinElmer ASCII (*.asc)."""
+    if path.suffix.lower() == ".asc":
+        return _read_perkinelmer_ascii(path)
     jc = _try_import_jcamp()
     if hasattr(jc, "readfile"):
         return jc.readfile(str(path))
@@ -97,3 +99,56 @@ def flatten_if_link(d: dict[str, Any]) -> dict[str, Any]:
                 child.update({k: v for k, v in d.items() if k in ("filename", "cas registry no")})
                 return child
     return d
+
+
+def _read_perkinelmer_ascii(path: Path) -> dict[str, Any]:
+    """
+    Читает спектры PerkinElmer ASCII (*.asc), встречающиеся в локальных ATR-экспортах.
+    Ожидает блок #DATA с двумя колонками: wavenumber и %T.
+    """
+    text = path.read_text(encoding="cp1251", errors="ignore")
+    lines = text.splitlines()
+
+    data_idx = None
+    for i, ln in enumerate(lines):
+        if ln.strip().upper() == "#DATA":
+            data_idx = i + 1
+            break
+    if data_idx is None:
+        raise ValueError(f"ASC parse error: no #DATA block in {path}")
+
+    xs: list[float] = []
+    ys: list[float] = []
+    for ln in lines[data_idx:]:
+        row = ln.strip()
+        if not row or row.startswith("#"):
+            continue
+        parts = re.split(r"[\t ]+", row)
+        if len(parts) < 2:
+            continue
+        try:
+            x = float(parts[0].replace(",", "."))
+            y = float(parts[1].replace(",", "."))
+        except ValueError:
+            continue
+        xs.append(x)
+        ys.append(y)
+
+    if len(xs) < 8:
+        raise ValueError(f"ASC parse error: too few numeric points in {path}")
+
+    stem = path.stem
+    title = re.sub(r"^\d+\s*", "", stem).replace("_", " ").strip()
+    if not title:
+        title = stem
+
+    return {
+        "filename": str(path),
+        "title": title,
+        "origin": "PerkinElmer ASCII",
+        "xunits": "cm-1",
+        "yunits": "TRANSMITTANCE",
+        "npoints": len(xs),
+        "x": np.asarray(xs, dtype=float),
+        "y": np.asarray(ys, dtype=float),
+    }

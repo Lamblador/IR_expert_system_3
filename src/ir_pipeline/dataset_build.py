@@ -51,7 +51,7 @@ def iter_jcamp_files(raw_dir: Path, max_files: int) -> list[Path]:
             continue
         if p.name.startswith("."):
             continue
-        if p.suffix.lower() == ".jdx" or p.suffix == "":
+        if p.suffix.lower() in {".jdx", ".asc"} or p.suffix == "":
             paths.append(p)
         if max_files and len(paths) >= max_files:
             break
@@ -212,7 +212,14 @@ def build_dataset(
         grid = preprocess_to_grid(x_cm, y_abs_like)
         last_wn = grid.wavenumbers
         try:
-            tg = jcamp_xy_to_telegram(x_cm, y_abs_like)
+            tg = jcamp_xy_to_telegram(
+                x_cm,
+                np.asarray(d["y"], dtype=float),
+                yunits=yunits,
+            )
+            qc_abs = tg.scale_meta.get("absorbance_qc", {})
+            if isinstance(qc_abs, dict) and not qc_abs.get("ok", True):
+                _event(f"absorbance scale QC warning for {sid}: {qc_abs.get('issues')}")
             telegram_list.append(tg.tensor_3ch)
         except Exception as e:
             _event(f"telegram tensor failed for {sid}: {e}")

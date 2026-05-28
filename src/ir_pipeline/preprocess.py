@@ -58,6 +58,110 @@ def to_absorbance_like(y: np.ndarray, yunits: str | None) -> np.ndarray:
     return y
 
 
+def infer_spectrum_y_scale(y: np.ndarray) -> str:
+    """
+    Эвристика: пропускание держится около 1 (или 100) с провалами,
+    поглощение — около 0 с положительными пиками.
+    """
+    v = np.asarray(y, dtype=np.float64)
+    v = v[np.isfinite(v)]
+    if v.size < 8:
+        return "unknown"
+    med = float(np.median(v))
+    p90 = float(np.percentile(v, 90))
+    p10 = float(np.percentile(v, 10))
+
+    if med > 0.55 and p90 > 0.8:
+        return "transmittance"
+    if med < 0.5 and p90 <= 3.0:
+        return "absorbance"
+    if p90 > 1.2:
+        return "absorbance"
+    return "unknown"
+
+
+def ensure_absorbance(
+    y: np.ndarray,
+    yunits: str | None = None,
+    *,
+    assumed_scale: str | None = None,
+) -> tuple[np.ndarray, dict[str, object]]:
+    """
+    Приводит Y к шкале поглощения (-log10 T).
+    Не использует (1 - T): это ломает уже переведённые спектры.
+    """
+    v = np.asarray(y, dtype=np.float64)
+    meta: dict[str, object] = {
+        "input_scale": None,
+        "converted": False,
+        "method": None,
+    }
+
+    if yunits:
+        meta["input_scale"] = str(yunits)
+        meta["method"] = "yunits"
+        meta["converted"] = "TRANSMITTANCE" in str(yunits).upper() or "TRANSMISSION" in str(yunits).upper()
+        return to_absorbance_like(v, yunits), meta
+
+    if assumed_scale == "absorbance":
+        meta["input_scale"] = "absorbance"
+        meta["method"] = "assumed_absorbance"
+        return v, meta
+    if assumed_scale == "transmittance":
+        meta["input_scale"] = "transmittance"
+        meta["method"] = "transmittance_to_absorbance"
+        meta["converted"] = True
+        return transmittance_to_absorbance(v), meta
+
+    detected = infer_spectrum_y_scale(v)
+    meta["input_scale"] = detected
+    if detected == "transmittance":
+        meta["method"] = "transmittance_to_absorbance"
+        meta["converted"] = True
+        return transmittance_to_absorbance(v), meta
+    if detected == "absorbance":
+        meta["method"] = "heuristic_absorbance"
+        return v, meta
+
+    if med := float(np.median(v[np.isfinite(v)])) > 0.55:
+        meta["input_scale"] = "transmittance_fallback"
+        meta["method"] = "fallback_transmittance_to_absorbance"
+        meta["converted"] = True
+        return transmittance_to_absorbance(v), meta
+
+    meta["method"] = "passthrough"
+    return v, meta
+
+
+def validate_absorbance_spectrum(y: np.ndarray) -> dict[str, object]:
+    """QC: похоже ли на поглощение, а не на пропускание около 1."""
+    v = np.asarray(y, dtype=np.float64)
+    v = v[np.isfinite(v)]
+    if v.size < 8:
+        return {"ok": False, "issues": ["too_few_points"], "median": None, "p90": None}
+
+    med = float(np.median(v))
+    p90 = float(np.percentile(v, 90))
+    p10 = float(np.percentile(v, 10))
+    issues: list[str] = []
+
+    if med > 0.7 and p90 > 0.9:
+        issues.append("looks_like_transmittance")
+    if p90 - p10 < 1e-4:
+        issues.append("flat_spectrum")
+    if np.nanmin(v) < -0.05:
+        issues.append("negative_values")
+
+    return {
+        "ok": len(issues) == 0,
+        "issues": issues,
+        "median": med,
+        "p90": p90,
+        "p10": p10,
+        "inferred_scale": infer_spectrum_y_scale(v),
+    }
+
+
 def baseline_als(y: np.ndarray, lam: float = 1e5, p: float = 0.001, n_iter: int = 10) -> np.ndarray:
     """Asymmetric least squares baseline (Eilers & Boelens)."""
     L = len(y)

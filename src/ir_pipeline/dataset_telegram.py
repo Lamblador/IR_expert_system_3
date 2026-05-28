@@ -16,7 +16,7 @@ from tqdm import tqdm
 from ir_pipeline.bands import load_bands
 from ir_pipeline.jcamp_loader import flatten_if_link, read_jcamp_dict
 from ir_pipeline.logging_utils import log
-from ir_pipeline.preprocess import to_absorbance_like, wavenumbers_from_jcamp
+from ir_pipeline.preprocess import ensure_absorbance, validate_absorbance_spectrum, wavenumbers_from_jcamp
 from ir_pipeline.telegram_preprocess import (
     BOT_WAVENUMBERS,
     detect_peaks_bot,
@@ -33,7 +33,8 @@ def build_telegram_arrays_from_npz(dataset_dir: Path, *, peak_threshold: float =
     spec_ids = [str(s) for s in z["spectrum_id"].tolist()]
     tensors: list[np.ndarray] = []
     for i in range(len(spec_ids)):
-        ab_bot = interpolate_bot_grid(wn, Y[i])
+        ab_row, _ = ensure_absorbance(Y[i], assumed_scale="absorbance")
+        ab_bot = interpolate_bot_grid(wn, ab_row)
         pk = detect_peaks_bot(ab_bot, threshold=peak_threshold)
         wn_b = BOT_WAVENUMBERS.copy()
         tensors.append(np.vstack([wn_b, ab_bot, pk]).astype(np.float32))
@@ -60,8 +61,9 @@ def build_telegram_arrays_from_jcamp(
         try:
             d = flatten_if_link(read_jcamp_dict(fp))
             x_cm = wavenumbers_from_jcamp(np.asarray(d["x"], dtype=float), d.get("xunits"))
-            y = to_absorbance_like(np.asarray(d["y"], dtype=float), d.get("yunits"))
-            tg = jcamp_xy_to_telegram(x_cm, y, peak_threshold=peak_threshold)
+            yunits = d.get("yunits")
+            y_raw = np.asarray(d["y"], dtype=float)
+            tg = jcamp_xy_to_telegram(x_cm, y_raw, yunits=yunits, peak_threshold=peak_threshold)
             tensors.append(tg.tensor_3ch)
             ids.append(sid)
         except Exception as e:
@@ -116,38 +118,66 @@ def plot_dataset_preview(
     *,
     n_examples: int = 3,
 ) -> list[Path]:
-    """Примеры спектров + баланс классов."""
+    """Примеры спектров + баланс классов (ось и метки из spectra.npz)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
-    z = np.load(dataset_dir / "telegram_arrays.npz", allow_pickle=True)
-    X_bot = z["X_bot"]
-    spec_ids = [str(s) for s in z["spectrum_id"].tolist()]
+    z = np.load(dataset_dir / "spectra.npz", allow_pickle=True)
+    wn_main = np.asarray(z["wavenumbers"], dtype=np.float64)
+    X_abs = np.asarray(z["X_absorbance_corrected"], dtype=np.float64)
+    spec_ids_npz = [str(s) for s in z["spectrum_id"].tolist()]
+    sid_to_idx = {s: i for i, s in enumerate(spec_ids_npz)}
+
+    meta = pd.read_parquet(dataset_dir / "meta.parquet")
+    ok_meta = meta[meta["qc_ok"] == True]  # noqa: E712
+    pick = ok_meta.head(n_examples) if len(ok_meta) >= n_examples else ok_meta
+
     labels = pd.read_parquet(dataset_dir / "labels_spectrum.parquet")
     bands = load_bands(bands_yaml)
+    preview_qc: list[dict[str, object]] = []
 
-    for i in range(min(n_examples, len(spec_ids))):
-        wn, ab, pk = X_bot[i, 0], X_bot[i, 1], X_bot[i, 2]
+    for plot_i, (_, row) in enumerate(pick.iterrows()):
+        sid = str(row["spectrum_id"])
+        if sid not in sid_to_idx:
+            continue
+        idx = sid_to_idx[sid]
+        wn = wn_main
+        ab = X_abs[idx]
+        ab_bot = interpolate_bot_grid(wn, ab)
+        qc = validate_absorbance_spectrum(ab_bot)
+        preview_qc.append({"spectrum_id": sid, **qc})
+        pk = detect_peaks_bot(ab_bot, threshold=0.1)
+
         fig, axes = plt.subplots(3, 1, figsize=(10, 7), sharex=True)
         axes[0].plot(wn, ab, "k-", lw=0.8)
-        axes[0].set_ylabel("absorption")
-        axes[0].set_title(f"Spectrum {spec_ids[i]}")
+        axes[0].set_ylabel("absorbance (corrected)")
+        title = str(row.get("title", sid))
+        qc_tag = "" if qc.get("ok") else f" [QC: {','.join(qc.get('issues', []))}]"
+        axes[0].set_title(f"{title} ({sid}){qc_tag}")
+
         axes[1].fill_between(wn, 0, pk * np.nanmax(ab), color="red", alpha=0.35)
         axes[1].plot(wn, ab, "k-", lw=0.6)
         axes[1].set_ylabel("peaks mask")
-        sid = spec_ids[i]
+
         sub = labels[(labels["spectrum_id"] == sid) & labels["observed_peak_cm1"].notna()]
-        for _, r in sub.head(12).iterrows():
+        for _, r in sub.iterrows():
             axes[2].axvline(float(r["observed_peak_cm1"]), color="tab:orange", alpha=0.5, lw=0.8)
         axes[2].plot(wn, ab, "k-", lw=0.6)
+        axes[2].set_xlim(float(np.max(wn)), float(np.min(wn)))
         axes[2].set_xlabel(r"Wavenumber (cm$^{-1}$)")
-        axes[2].set_ylabel("labeled peaks")
+        axes[2].set_ylabel(f"labeled peaks (n={len(sub)})")
         fig.tight_layout()
-        p = out_dir / f"preview_spectrum_{i}.png"
+        p = out_dir / f"preview_spectrum_{plot_i}.png"
         fig.savefig(p, dpi=140)
         plt.close(fig)
         written.append(p)
 
-    Y, class_names = build_multilabel_matrix(dataset_dir, spec_ids, bands_yaml)
+    if preview_qc:
+        (out_dir / "preview_absorbance_qc.json").write_text(
+            json.dumps(preview_qc, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    Y, class_names = build_multilabel_matrix(dataset_dir, spec_ids_npz, bands_yaml)
     counts = Y.sum(axis=0)
     order = np.argsort(-counts)
     top_n = min(40, len(class_names))
@@ -166,7 +196,7 @@ def plot_dataset_preview(
     written.append(p2)
 
     stats = {
-        "n_spectra": len(spec_ids),
+        "n_spectra": len(spec_ids_npz),
         "n_classes": len(class_names),
         "mean_labels_per_spectrum": float(Y.sum(axis=1).mean()),
     }

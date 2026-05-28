@@ -13,8 +13,9 @@ downloaded_jcamp/
 data/processed/
 runs/
 reports/predict_out/
-
+reports/
 .DS_Store
 Thumbs.db
 downloaded_jcamp.zip
 dataset_v*.zip
+data/raw/
