@@ -30,7 +30,6 @@ from ir_pipeline.structure_resolver import (
     seed_structure_cache_from_lamblador,
     structure_cache_path,
 )
-from ir_pipeline.telegram_preprocess import BOT_WAVENUMBERS, jcamp_xy_to_telegram
 
 
 def _event(message: str) -> None:
@@ -158,7 +157,6 @@ def build_dataset(
     spectra_list: list[np.ndarray] = []
     absorb_corr_list: list[np.ndarray] = []
     absorb_interp_list: list[np.ndarray] = []
-    telegram_list: list[np.ndarray] = []
     spectrum_ids: list[str] = []
     coverage_list: list[np.ndarray] = []
 
@@ -211,18 +209,6 @@ def build_dataset(
 
         grid = preprocess_to_grid(x_cm, y_abs_like)
         last_wn = grid.wavenumbers
-        try:
-            tg = jcamp_xy_to_telegram(
-                x_cm,
-                np.asarray(d["y"], dtype=float),
-                yunits=yunits,
-            )
-            qc_abs = tg.scale_meta.get("absorbance_qc", {})
-            if isinstance(qc_abs, dict) and not qc_abs.get("ok", True):
-                _event(f"absorbance scale QC warning for {sid}: {qc_abs.get('issues')}")
-            telegram_list.append(tg.tensor_3ch)
-        except Exception as e:
-            _event(f"telegram tensor failed for {sid}: {e}")
 
         cas_key = (meta_common.get("cas") or "").strip()
         title_key = (meta_common.get("title") or "").strip()
@@ -286,21 +272,6 @@ def build_dataset(
         X_absorbance_like_interp=X_abs_interp,
         coverage=C,
         wavenumbers=last_wn.astype(np.float32),
-    )
-
-    if len(telegram_list) == len(spectrum_ids) and telegram_list:
-        _event("writing telegram_arrays.npz (bot-compatible 3-channel)")
-        X_bot = np.stack(telegram_list, axis=0).astype(np.float32)
-    else:
-        _event("rebuilding telegram_arrays from spectra.npz (fallback)")
-        from ir_pipeline.dataset_telegram import build_telegram_arrays_from_npz
-
-        X_bot, _tids = build_telegram_arrays_from_npz(out_dir)
-    np.savez_compressed(
-        out_dir / "telegram_arrays.npz",
-        X_bot=X_bot,
-        spectrum_id=np.array(spectrum_ids, dtype=object),
-        wavenumbers=BOT_WAVENUMBERS,
     )
 
     rng = np.random.default_rng(int(split_seed))

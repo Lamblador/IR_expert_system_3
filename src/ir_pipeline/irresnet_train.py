@@ -1,4 +1,4 @@
-"""Обучение IrResnet4 (multi-label) на telegram_arrays.npz."""
+"""Обучение IrResnet4 (multi-label) на model_inputs.npz."""
 
 from __future__ import annotations
 
@@ -7,12 +7,12 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pandas as pd
 from tqdm import tqdm
 
-from ir_pipeline.dataset_telegram import build_multilabel_matrix
+from ir_pipeline.dataset_preview import build_multilabel_matrix
 from ir_pipeline.logging_utils import heartbeat, log
 from ir_pipeline.models.ir_resnet4 import IrResnet4
+from ir_pipeline.resnet_input import ensure_model_inputs_npz, load_model_inputs
 
 try:
     import torch
@@ -32,15 +32,22 @@ def is_torch_available() -> bool:
 if torch is not None:
 
     class IrDataset(Dataset):
-        def __init__(self, X: np.ndarray, Y: np.ndarray):
+        def __init__(self, X: np.ndarray, Y: np.ndarray, C: np.ndarray | None = None):
             self.X = X.astype(np.float32)
             self.Y = Y.astype(np.float32)
+            self.C = None if C is None else C.astype(np.float32)
 
         def __len__(self) -> int:
             return len(self.X)
 
         def __getitem__(self, i: int):
-            return torch.from_numpy(self.X[i]), torch.from_numpy(self.Y[i])
+            if self.C is None:
+                return torch.from_numpy(self.X[i]), torch.from_numpy(self.Y[i])
+            return (
+                torch.from_numpy(self.X[i]),
+                torch.from_numpy(self.C[i]),
+                torch.from_numpy(self.Y[i]),
+            )
 
 
 def train_irresnet_run(
@@ -51,22 +58,23 @@ def train_irresnet_run(
     *,
     device: str | None = None,
     label_schema: str = "spectrum",
+    peak_threshold: float = 0.1,
+    use_measurement_context: bool | None = None,
 ) -> dict[str, Any]:
     if not is_torch_available():
         raise RuntimeError("Установите torch: pip install -e '.[torch]'")
     assert torch is not None and DataLoader is not None and nn is not None
 
-    run_dir.mkdir(parents=True, exist_ok=True)
-    tg_path = dataset_dir / "telegram_arrays.npz"
-    if not tg_path.exists():
-        raise FileNotFoundError(f"Нет {tg_path}; пересоберите датасет (build-dataset)")
+    use_ctx = bool(train_cfg.get("use_measurement_context", True) if use_measurement_context is None else use_measurement_context)
 
-    z = np.load(tg_path, allow_pickle=True)
-    X_bot = z["X_bot"]
-    spec_ids = [str(s) for s in z["spectrum_id"].tolist()]
+    run_dir.mkdir(parents=True, exist_ok=True)
+    ensure_model_inputs_npz(dataset_dir, peak_threshold=peak_threshold, include_context=use_ctx)
+    X_in, _wn, spec_ids, X_ctx, ctx_cols = load_model_inputs(dataset_dir)
     Y, class_names = build_multilabel_matrix(dataset_dir, spec_ids, bands_yaml, label_schema=label_schema)
     if Y.sum() < 1:
         raise RuntimeError("Нет положительных меток для обучения")
+
+    context_dim = int(X_ctx.shape[1]) if use_ctx and X_ctx is not None else 0
 
     split_path = dataset_dir / "split.json"
     if split_path.exists():
@@ -88,8 +96,10 @@ def train_irresnet_run(
     if len(tr_idx) < 4:
         raise RuntimeError("Слишком мало спектров в train для IrResnet4")
 
-    X_tr, Y_tr = X_bot[tr_idx], Y[tr_idx]
-    X_te, Y_te = X_bot[te_idx], Y[te_idx]
+    X_tr, Y_tr = X_in[tr_idx], Y[tr_idx]
+    X_te, Y_te = X_in[te_idx], Y[te_idx]
+    C_tr = X_ctx[tr_idx] if context_dim else None
+    C_te = X_ctx[te_idx] if context_dim else None
 
     hidden = int(train_cfg.get("ir_hidden_size", 34))
     epochs = int(train_cfg.get("torch_epochs", 30))
@@ -98,18 +108,21 @@ def train_irresnet_run(
     pos_weight_scale = float(train_cfg.get("pos_weight_scale", 1.0))
 
     dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    log(f"irresnet-train: device={dev}, classes={len(class_names)}, train={len(tr_idx)}, test={len(te_idx)}")
+    log(
+        f"irresnet-train: device={dev}, classes={len(class_names)}, "
+        f"train={len(tr_idx)}, test={len(te_idx)}, context_dim={context_dim}"
+    )
 
     pos = Y_tr.sum(axis=0)
     neg = len(Y_tr) - pos
     pw = torch.tensor(np.clip(neg / np.maximum(pos, 1.0), 1.0, 50.0) * pos_weight_scale, dtype=torch.float32).to(dev)
 
-    model = IrResnet4(hidden_size=hidden, class_nums=len(class_names)).to(dev)
+    model = IrResnet4(hidden_size=hidden, class_nums=len(class_names), context_dim=context_dim).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pw)
 
-    ds_tr = IrDataset(X_tr, Y_tr)
-    ds_te = IrDataset(X_te, Y_te)
+    ds_tr = IrDataset(X_tr, Y_tr, C_tr)
+    ds_te = IrDataset(X_te, Y_te, C_te)
     dl_tr = DataLoader(ds_tr, batch_size=bs, shuffle=True, drop_last=len(ds_tr) > bs)
     dl_te = DataLoader(ds_te, batch_size=min(bs, len(ds_te)), shuffle=False)
 
@@ -122,15 +135,26 @@ def train_irresnet_run(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    def _forward_batch(xb: torch.Tensor, cb: torch.Tensor | None) -> torch.Tensor:
+        if context_dim:
+            return model(xb, cb)
+        return model(xb)
+
     with heartbeat(60.0, "irresnet training in progress..."):
         for ep in tqdm(range(epochs), desc="IrResnet epochs", unit="epoch"):
             model.train()
             tl = 0.0
             tn = 0
-            for xb, yb in dl_tr:
+            for batch in dl_tr:
+                if context_dim:
+                    xb, cb, yb = batch
+                    cb = cb.to(dev)
+                else:
+                    xb, yb = batch
+                    cb = None
                 xb, yb = xb.to(dev), yb.to(dev)
                 opt.zero_grad(set_to_none=True)
-                loss = criterion(model(xb), yb)
+                loss = criterion(_forward_batch(xb, cb), yb)
                 loss.backward()
                 opt.step()
                 tl += float(loss.item()) * len(xb)
@@ -142,9 +166,15 @@ def train_irresnet_run(
             vn = 0
             tp = fp = fn = 0.0
             with torch.no_grad():
-                for xb, yb in dl_te:
+                for batch in dl_te:
+                    if context_dim:
+                        xb, cb, yb = batch
+                        cb = cb.to(dev)
+                    else:
+                        xb, yb = batch
+                        cb = None
                     xb, yb = xb.to(dev), yb.to(dev)
-                    logits = model(xb)
+                    logits = _forward_batch(xb, cb)
                     loss = criterion(logits, yb)
                     vl += float(loss.item()) * len(xb)
                     vn += len(xb)
@@ -178,6 +208,10 @@ def train_irresnet_run(
         "label_schema": label_schema,
         "history": history,
         "device_trained": dev,
+        "context_dim": context_dim,
+        "context_columns": ctx_cols if context_dim else [],
+        "grid": {"min": 400.0, "max": 4000.0, "step": 2.0},
+        "use_measurement_context": bool(context_dim),
     }
     torch.save({"model_state": model.state_dict(), "meta": bundle}, run_dir / "irresnet_bundle.pt")
     (run_dir / "irresnet_history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
@@ -199,6 +233,7 @@ def train_irresnet_run(
         "n_classes": len(class_names),
         "best_val_loss": best_val,
         "final_val_f1": history["val_f1_macro"][-1] if history["val_f1_macro"] else None,
+        "context_dim": context_dim,
         "run_dir": str(run_dir),
     }
     (run_dir / "irresnet_metrics.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")

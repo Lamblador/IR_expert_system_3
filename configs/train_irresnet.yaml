@@ -1,8 +1,10 @@
 random_seed: 42
 train_frac: 0.85
-torch_epochs: 15
-torch_batch_size: 16
+torch_epochs: 30
+torch_batch_size: 32
 torch_lr: 0.001
 ir_hidden_size: 34
-model_version: v0.1.0.34
 pos_weight_scale: 1.0
+model_version: v0.1.0.34
+# one-hot: ATR / transmission / gas / solution + фаза образца → конкатенация перед FC
+use_measurement_context: true

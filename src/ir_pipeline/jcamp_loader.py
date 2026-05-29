@@ -52,6 +52,10 @@ def extract_measurement_mode(meta: dict[str, Any]) -> str:
     )
     if "ATR" in blob or "ATTENUATED TOTAL REFLECTANCE" in blob:
         return "atr"
+    if "GAS PHASE" in blob or " GAS SAMPLE" in blob or blob.startswith("GAS ") or " FTIR GAS" in blob:
+        return "gas"
+    if "SOLUTION" in blob or "SOLVENT" in blob or " IN CHLOROFORM" in blob or " IN CCL4" in blob:
+        return "solution"
     if "TRANSMISSION" in blob or "TRANSMITTANCE" in blob:
         return "transmission"
     if "ABSORBANCE" in blob or "ABSORPTION" in blob:
@@ -62,6 +66,17 @@ def extract_measurement_mode(meta: dict[str, Any]) -> str:
 def extract_sample_state(meta: dict[str, Any]) -> str:
     st = str(meta.get("state", meta.get("sample state", ""))).lower()
     if not st:
+        blob = " ".join(
+            str(meta.get(k, "")).lower()
+            for k in ("title", "sample description", "comments")
+            if k in meta
+        )
+        if "gas" in blob:
+            return "gas"
+        if "solution" in blob or "liquid" in blob:
+            return "solution"
+        if "solid" in blob or "powder" in blob:
+            return "solid"
         return "unknown"
     return st.split(",")[0].strip()
 

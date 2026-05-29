@@ -9,6 +9,9 @@ from rdkit import Chem
 from ir_pipeline.bands import BandDef, structure_matches_band
 from ir_pipeline.preprocess import intensity_bucket_from_peak
 
+# Минимальная высота локального максимума на нормированном спектре в регионе полосы.
+REGION_PEAK_MIN_HEIGHT = 0.1
+
 
 @dataclass
 class BandObservation:
@@ -28,10 +31,11 @@ def find_dominant_peak_in_region(
     region_min: float,
     region_max: float,
     prominence_rel: float = 0.015,
+    min_peak_height: float = REGION_PEAK_MIN_HEIGHT,
 ) -> tuple[float | None, float]:
     """
-    Ищет главный пик в регионе на нормализованном спектре.
-    Возвращает (peak_cm1, confidence 0..1).
+    Ищет главный пик в регионе на нормированном спектре.
+    Возвращает (peak_cm1, confidence 0..1). None, если максимум в регионе < min_peak_height.
     """
     sel = (wn >= region_min) & (wn <= region_max) & mask
     if sel.sum() < 5:
@@ -41,13 +45,15 @@ def find_dominant_peak_in_region(
     prom = max(prominence_rel, float(np.nanmax(y)) * prominence_rel)
     peaks, props = find_peaks(y, prominence=prom)
     if peaks.size == 0:
-        # fallback: просто максимум
         i = int(np.argmax(y))
+        if float(y[i]) < min_peak_height:
+            return None, 0.0
         return float(x[i]), 0.35
-    # самый высокий по prominence * height
     scores = props["prominences"] * y[peaks]
     j = int(np.argmax(scores))
-    pk = peaks[j]
+    pk = int(peaks[j])
+    if float(y[pk]) < min_peak_height:
+        return None, 0.0
     peak_cm = float(x[pk])
     conf = float(min(1.0, props["prominences"][j] / (prom + 1e-9)))
     return peak_cm, conf

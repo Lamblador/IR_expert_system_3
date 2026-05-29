@@ -12,12 +12,12 @@ flowchart TB
         QC[QC + preprocess grid 400-4000]
         STRUCT[CAS to SMILES cache]
         LABEL[Band labeling SMARTS]
-        TG[telegram_arrays 500-4100 3ch]
+        RIN[model_inputs 400-4000 3ch + context]
     end
     subgraph store [Artifacts]
         NPZ[spectra.npz]
         PARQ[meta + labels parquet]
-        TGNPZ[telegram_arrays.npz]
+        MINPZ[model_inputs.npz]
     end
     subgraph models [Models]
         RF[RF per band]
@@ -25,44 +25,56 @@ flowchart TB
         IR4[IrResnet4 multilabel]
     end
     subgraph out [Outputs]
-        BOT[FTIR Telegram bot]
+        PREV[dataset preview PNG]
         CAM[Grad-CAM PNG]
     end
     JCAMP --> QC
     HF --> NPZ
     QC --> NPZ
-    QC --> TG
+    NPZ --> RIN
+    RIN --> MINPZ
     STRUCT --> PARQ
     LABEL --> PARQ
-    TG --> TGNPZ
     NPZ --> RF
     NPZ --> CNN1D
-    TGNPZ --> IR4
+    MINPZ --> IR4
+    NPZ --> PREV
     IR4 --> CAM
-    IR4 --> BOT
-    RF --> BOT
 ```
 
 ## Две колеи глубокого обучения
 
-| Колея | Модуль | Задача | Интеграция с ботом |
-|-------|--------|--------|-------------------|
-| A | `torch_train.ConvPeakMultitask` | Регрессия ν пика по полосам | Нет (эксперимент) |
-| B | `models.IrResnet4` | Multi-label: полоса присутствует | Да: `prepare_input` 3×1801 |
+| Колея | Модуль | Задача |
+|-------|--------|--------|
+| A | `torch_train.ConvPeakMultitask` | Регрессия ν пика по полосам |
+| B | `models.IrResnet4` | Multi-label: полоса присутствует |
 
-## Вход IrResnet4 (как в Telegram-боте)
+## Вход IrResnet4
 
-Тензор `(batch, 3, L)`, `L=1801` (500–4100 см⁻¹, шаг 2):
+Тензор `(batch, 3, L)`, `L=1801` (400–4000 см⁻¹, шаг 2) + опционально `context` (one-hot техники/фазы):
 
 1. **wavenumbers** — фиксированная сетка
-2. **absorption** — после `convert_to_absorption` + интерполяция
+2. **absorption** — поглощение после интерполяции с сетки датасета
 3. **peaks** — маска пиков (peakutils)
 
-Сборка: [`telegram_preprocess.py`](../src/ir_pipeline/telegram_preprocess.py), сохранение в `telegram_arrays.npz` при `build-dataset`.
+Сборка: [`resnet_input.py`](../src/ir_pipeline/resnet_input.py) → кэш `model_inputs.npz` (при обучении или Grad-CAM).
 
 ## Метки multi-label
 
-Для каждого `band_id` из [`bands_reference.yaml`](../configs/bands_reference.yaml): метка `1`, если в `labels_spectrum.parquet` есть `observed_peak_cm1` для этой полосы.
+Для каждого `band_id` из [`bands_reference.yaml`](../configs/bands_reference.yaml): метка `1`, если в `labels_spectrum.parquet` (или `labels_structure.parquet`) есть `observed_peak_cm1`.
+
+## Превью датасета
+
+[`dataset_preview.py`](../src/ir_pipeline/dataset_preview.py): спектр + вертикальные метки spectrum (оранж.) и structure (син.).
+
+## Grad-CAM (ручной режим)
+
+```bash
+ir-pipeline gradcam-examples --run-dir runs/<irresnet_run> \
+  --spectrum-indices 0,5,12 --class-indices 3,12
+```
+
+Без индексов — первые N спектров и классы по порогу sigmoid. Модуль: [`gradcam.py`](../src/ir_pipeline/gradcam.py).
 
 ## Оркестратор
 
@@ -70,29 +82,17 @@ flowchart TB
 
 - `run stage <name>` — одна стадия
 - `run profile smoke|full_local` — цепочка
-- состояние в `pipeline_state.json` (пути к `rf_run`, `irresnet_run`)
-
-## Экспорт в бот
-
-```
-runs/.../irresnet_run/irresnet_bundle.pt
-    → export-telegram
-    → FTIR_telegram_bot/models/v0.1.0.34/
-         v0.1.0.34_model_param
-         v0.1.0.34_classes.txt
-         v0.1.0.34.pt
-```
-
-Загрузка в боте: [`ftir_models.load_single_model`](../../FTIR_telegram_bot/ftir_models.py).
+- состояние в `pipeline_state.json`
 
 ## Модули
 
 | Файл | Роль |
 |------|------|
-| `dataset_build.py` | Сборка датасета + telegram npz |
+| `dataset_build.py` | Сборка датасета |
+| `dataset_preview.py` | Превью и баланс классов |
+| `resnet_input.py` | 3-канальный вход IrResnet4 |
 | `train_sklearn.py` | RF + measurement_mode features |
 | `irresnet_train.py` | Обучение IrResnet4 |
-| `gradcam.py` | Explainability |
-| `export_telegram.py` | Пакет для бота |
+| `gradcam.py` | Grad-CAM визуализация |
 | `logging_utils.py` | log + heartbeat |
 | `metrics_plot.py` | MAE plots для RF |

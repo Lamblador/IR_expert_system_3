@@ -21,7 +21,6 @@ from ir_pipeline.train_sklearn import train_models
 from ir_pipeline.metrics_plot import plot_train_metrics
 from ir_pipeline.visualize import predict_file_visualize
 from ir_pipeline import torch_train as torch_train_mod
-from ir_pipeline.export_telegram import export_irresnet_to_bot
 from ir_pipeline import irresnet_train as irresnet_train_mod
 from ir_pipeline.stage_runner import list_profiles, list_stages, load_stages_config, run_profile, run_stage
 
@@ -418,7 +417,7 @@ def irresnet_train_cmd(
     device: str | None,
     label_schema: str,
 ):
-    """IrResnet4 multi-label (формат Telegram-бота, 3 канала)."""
+    """Обучение IrResnet4 (multi-label, 3 канала)."""
     if not irresnet_train_mod.is_torch_available():
         raise click.ClickException("Установите torch: pip install -e '.[torch]'")
     paths_cfg = load_yaml(paths)
@@ -441,15 +440,37 @@ def irresnet_train_cmd(
     click.echo(f"IrResnet training done → {rd}\n{summary}")
 
 
-@main.command("cam-examples")
+@main.command("gradcam-examples")
 @click.option("--paths", type=click.Path(exists=True, path_type=Path), default=Path("configs/paths.local.yaml"))
 @click.option("--dataset-version", type=str, default=None)
 @click.option("--run-dir", type=click.Path(exists=True, path_type=Path), required=True, help="каталог с irresnet_bundle.pt")
-@click.option("--output-dir", type=click.Path(path_type=Path), default=Path("reports/cam"))
-@click.option("--n-examples", type=int, default=3)
-def cam_examples_cmd(paths: Path, dataset_version: str | None, run_dir: Path, output_dir: Path, n_examples: int):
-    """Grad-CAM примеры для обученной IrResnet4."""
-    from ir_pipeline.gradcam import run_cam_examples
+@click.option("--output-dir", type=click.Path(path_type=Path), default=Path("reports/gradcam"))
+@click.option("--n-examples", type=int, default=3, help="сколько спектров, если не заданы --spectrum-indices")
+@click.option(
+    "--spectrum-indices",
+    type=str,
+    default=None,
+    help="индексы спектров через запятую, напр. 0,5,12 (ручной режим)",
+)
+@click.option(
+    "--class-indices",
+    type=str,
+    default=None,
+    help="индексы классов через запятую; иначе — по порогу sigmoid",
+)
+@click.option("--confidence-threshold", type=float, default=0.5, show_default=True)
+def gradcam_examples_cmd(
+    paths: Path,
+    dataset_version: str | None,
+    run_dir: Path,
+    output_dir: Path,
+    n_examples: int,
+    spectrum_indices: str | None,
+    class_indices: str | None,
+    confidence_threshold: float,
+):
+    """Grad-CAM: наложение важности регионов на спектр (ручной выбор индексов опционален)."""
+    from ir_pipeline.gradcam import run_gradcam_examples
 
     paths_cfg = load_yaml(paths)
     p = resolve_paths(paths_cfg)
@@ -457,24 +478,23 @@ def cam_examples_cmd(paths: Path, dataset_version: str | None, run_dir: Path, ou
     ds_dir = p["processed_root"] / dv
     bundle = run_dir / "irresnet_bundle.pt"
     if not bundle.exists():
-        raise click.ClickException(f"Нет {bundle}")
-    paths_out = run_cam_examples(bundle, ds_dir, output_dir, n_examples=n_examples)
+        raise click.ClickException(f"Нет {bundle}; сначала ir-pipeline irresnet-train ...")
+
+    def _parse_ints(s: str | None) -> list[int] | None:
+        if not s or not s.strip():
+            return None
+        return [int(x.strip()) for x in s.split(",") if x.strip()]
+
+    paths_out = run_gradcam_examples(
+        bundle,
+        ds_dir,
+        output_dir,
+        n_examples=n_examples,
+        confidence_threshold=confidence_threshold,
+        spectrum_indices=_parse_ints(spectrum_indices),
+        class_indices=_parse_ints(class_indices),
+    )
     click.echo("Written:\n" + "\n".join(str(x) for x in paths_out))
-
-
-@main.command("export-telegram")
-@click.option("--run-dir", type=click.Path(exists=True, path_type=Path), required=True)
-@click.option(
-    "--target-dir",
-    type=click.Path(path_type=Path),
-    default=Path(r"D:\Programming\Python\FTIR_telegram_bot\models"),
-    show_default=True,
-)
-@click.option("--model-version", type=str, default=None)
-def export_telegram_cmd(run_dir: Path, target_dir: Path, model_version: str | None):
-    """Экспорт IrResnet4 в каталог моделей FTIR Telegram-бота."""
-    out = export_irresnet_to_bot(run_dir, target_dir, model_version=model_version)
-    click.echo(f"Exported to {out}")
 
 
 @main.group("run")

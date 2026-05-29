@@ -93,14 +93,14 @@ os.environ["HF_TOKEN"] = userdata.get("HF_TOKEN")
 # Список стадий и профилей
 ir-pipeline run list
 
-# Colab / smoke: HF mini-dataset → RF → IrResnet4 → CAM → export в бот
+# Colab / smoke: HF mini-dataset → превью → RF
 ir-pipeline run profile smoke --paths configs/paths.huggingface.yaml
 
 # Одна стадия
 ir-pipeline run stage dataset_preview --paths configs/paths.local.yaml
 ```
 
-Colab: поэтапные ноутбуки в [`notebooks/`](notebooks/) (`colab_00_setup` … `colab_05_export_telegram`).
+Colab: ноутбуки в [`notebooks/`](notebooks/) (`colab_00_setup` … `colab_04_gradcam`).
 
 ## Команды
 
@@ -141,10 +141,11 @@ ir-pipeline torch-train --paths configs/paths.local.yaml --dataset-version datas
 
 ir-pipeline predict ... --run-dir runs/<torch_run> --torch --output-dir reports/out_torch
 
-# IrResnet4 multi-label (формат FTIR Telegram-бота, Grad-CAM)
+# IrResnet4 multi-label + Grad-CAM (ручной выбор индексов опционален)
 ir-pipeline irresnet-train --paths configs/paths.local.yaml --dataset-version dataset_mini --config configs/train_irresnet.yaml
-ir-pipeline cam-examples --paths configs/paths.local.yaml --run-dir runs/<irresnet_run>
-ir-pipeline export-telegram --run-dir runs/<irresnet_run> --target-dir "D:/Programming/Python/FTIR_telegram_bot/models"
+ir-pipeline gradcam-examples --paths configs/paths.local.yaml --run-dir runs/<irresnet_run> --output-dir reports/gradcam
+ir-pipeline gradcam-examples --run-dir runs/<irresnet_run> --spectrum-indices 0,7,15 --class-indices 3,12
+
 ```
 
 Справочник [`configs/bands_reference.yaml`](configs/bands_reference.yaml) дополнен строками по таблице Википедии «[Таблица характеристических частот в инфракрасной спектроскопии](https://ru.wikipedia.org/wiki/Таблица_характеристических_частот_в_инфракрасной_спектроскопии)» (`source: ru.wikipedia IR table`); скорректированы интервалы для `ch_sp3`, замечания для `nh_stretch`.

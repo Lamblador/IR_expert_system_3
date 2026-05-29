@@ -10,11 +10,8 @@ from typing import Any
 
 from ir_pipeline.config_loader import load_yaml, merge_train_defaults, resolve_paths
 from ir_pipeline.dataset_build import build_dataset
-from ir_pipeline.dataset_telegram import build_telegram_arrays_from_jcamp, plot_dataset_preview, save_telegram_npz
+from ir_pipeline.dataset_preview import plot_dataset_preview
 from ir_pipeline.evaluate import evaluate_run
-from ir_pipeline.export_telegram import export_irresnet_to_bot
-from ir_pipeline.gradcam import run_cam_examples
-from ir_pipeline.irresnet_train import train_irresnet_run
 from ir_pipeline.logging_utils import configure_log, heartbeat, log
 from ir_pipeline.metrics_plot import plot_train_metrics
 from ir_pipeline.train_sklearn import train_models
@@ -118,21 +115,13 @@ def run_stage(
             elif stage_key == "dataset_preview":
                 if not (ds_dir / "meta.parquet").exists():
                     raise FileNotFoundError(f"Нет датасета {ds_dir}; выполните fetch или dataset_build")
-                meta = __import__("pandas").read_parquet(ds_dir / "meta.parquet")
-                if not (ds_dir / "telegram_arrays.npz").exists():
-                    log("building telegram_arrays.npz")
-                    from ir_pipeline.dataset_telegram import build_telegram_arrays_from_npz
-
-                    try:
-                        X_bot, tids = build_telegram_arrays_from_jcamp(
-                            meta, p["raw_jcamp_dir"], peak_threshold=float(defaults.get("peak_threshold", 0.1))
-                        )
-                    except Exception:
-                        X_bot, tids = build_telegram_arrays_from_npz(
-                            ds_dir, peak_threshold=float(defaults.get("peak_threshold", 0.1))
-                        )
-                    save_telegram_npz(ds_dir, X_bot, tids)
-                plots = plot_dataset_preview(ds_dir, stage_dir / "plots", bands_yaml)
+                plots = plot_dataset_preview(
+                    ds_dir,
+                    stage_dir / "plots",
+                    bands_yaml,
+                    n_examples=int(defaults.get("preview_n_examples", 3)),
+                    seed=int(defaults.get("preview_seed", 42)),
+                )
                 log(f"preview plots: {plots}")
 
             elif stage_key == "train_rf":
@@ -156,57 +145,12 @@ def run_stage(
                 p1, p2 = plot_train_metrics(rf_run, bands_yaml, output_dir=stage_dir / "plots")
                 log(f"metrics plots: {p1}, {p2}")
 
-            elif stage_key == "train_irresnet":
-                if not (ds_dir / "telegram_arrays.npz").exists():
-                    from ir_pipeline.dataset_telegram import build_telegram_arrays_from_npz
-
-                    meta = __import__("pandas").read_parquet(ds_dir / "meta.parquet")
-                    try:
-                        X_bot, tids = build_telegram_arrays_from_jcamp(
-                            meta, p["raw_jcamp_dir"], peak_threshold=float(defaults.get("peak_threshold", 0.1))
-                        )
-                    except Exception:
-                        X_bot, tids = build_telegram_arrays_from_npz(
-                            ds_dir, peak_threshold=float(defaults.get("peak_threshold", 0.1))
-                        )
-                    save_telegram_npz(ds_dir, X_bot, tids)
-                train_cfg = merge_train_defaults(load_yaml(Path(defaults["train_config_irresnet"])))
-                rd = stage_dir / "irresnet_run"
-                summary = train_irresnet_run(
-                    dataset_dir=ds_dir,
-                    run_dir=rd,
-                    bands_yaml=bands_yaml,
-                    train_cfg=train_cfg,
-                    device=defaults.get("device"),
-                )
-                state["irresnet_run_dir"] = str(rd)
-                state["irresnet_summary"] = summary
-
-            elif stage_key == "cam_examples":
-                ir_run = Path(state.get("irresnet_run_dir", stage_dir / "irresnet_run"))
-                bundle = ir_run / "irresnet_bundle.pt"
-                if not bundle.exists():
-                    raise FileNotFoundError(f"Нет {bundle}; сначала train_irresnet")
-                paths = run_cam_examples(bundle, ds_dir, stage_dir / "cam", n_examples=int(defaults.get("cam_n", 3)))
-                state["cam_paths"] = [str(x) for x in paths]
-
             elif stage_key == "evaluate_rf":
                 rf_run = Path(state.get("rf_run_dir", stage_dir / "rf_run"))
                 summary = evaluate_run(ds_dir, rf_run, mode=str(defaults.get("rf_mode", "spectrum")))
                 (stage_dir / "eval_report.json").write_text(
                     json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
                 )
-
-            elif stage_key == "export_telegram":
-                ir_run = Path(state.get("irresnet_run_dir", stage_dir / "irresnet_run"))
-                target = Path(
-                    defaults.get(
-                        "telegram_models_dir",
-                        r"D:\Programming\Python\FTIR_telegram_bot\models",
-                    )
-                )
-                out = export_irresnet_to_bot(ir_run, target, model_version=defaults.get("export_model_version"))
-                state["telegram_export_dir"] = str(out)
 
             elif stage_key == "predict_smoke":
                 rf_run = Path(state.get("rf_run_dir", stage_dir / "rf_run"))

@@ -6,8 +6,8 @@ defaults:
   dataset_version: dataset_mini
   train_config: configs/train_mini.yaml
   train_config_torch: configs/train_mini.yaml
-  train_config_irresnet: configs/train_irresnet.yaml
-  peak_threshold: 0.1
+  preview_n_examples: 3
+  preview_seed: 42
   hf_filename: dataset_mini.zip
   hf_extract_to: data/processed
 
@@ -20,27 +20,18 @@ stages:
     description: "Собрать датасет из JCAMP (локально)"
   dataset_preview:
     id: "03"
-    description: "Превью спектров и баланса классов"
+    description: "Превью спектров (метки spectrum/structure) и баланса классов"
   train_rf:
     id: "04"
     description: "Обучение RandomForest baseline"
   plot_rf_metrics:
     id: "05"
     description: "Графики MAE по полосам (RF)"
-  train_irresnet:
-    id: "06"
-    description: "Обучение IrResnet4 (multi-label, CAM-ready)"
-  cam_examples:
-    id: "07"
-    description: "Grad-CAM примеры"
   evaluate_rf:
-    id: "08"
+    id: "06"
     description: "Оценка RF на test split"
-  export_telegram:
-    id: "09"
-    description: "Экспорт модели в FTIR Telegram-бот"
   predict_smoke:
-    id: "10"
+    id: "07"
     description: "Smoke predict на одном JCAMP"
 
 profiles:
@@ -49,15 +40,9 @@ profiles:
     - dataset_preview
     - train_rf
     - plot_rf_metrics
-    - train_irresnet
-    - cam_examples
-    - export_telegram
   full_local:
     - dataset_build
     - dataset_preview
     - train_rf
     - plot_rf_metrics
-    - train_irresnet
-    - cam_examples
     - evaluate_rf
-    - export_telegram

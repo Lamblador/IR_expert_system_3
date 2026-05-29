@@ -14,12 +14,9 @@ ir-pipeline run profile smoke --paths configs/paths.huggingface.yaml
 | № | Стадия | Что делает | Артефакты |
 |---|--------|------------|-----------|
 | 01 | `fetch` | Скачивание `dataset_mini.zip` с Hugging Face | `data/processed/dataset_mini/` |
-| 03 | `dataset_preview` | Превью спектров, баланс классов | `runs/.../stage_03_.../plots/*.png` |
-| 04 | `train_rf` | RandomForest по полосам | `stage_04_.../rf_run/models.joblib`, `metrics.json` |
+| 03 | `dataset_preview` | Превью спектров (spectrum/structure labels) | `runs/.../plots/*.png` |
+| 04 | `train_rf` | RandomForest по полосам | `rf_run/models.joblib`, `metrics.json` |
 | 05 | `plot_rf_metrics` | MAE по полосам и группам | `plots/metrics_*.png` |
-| 06 | `train_irresnet` | IrResnet4 multi-label (3 канала, как в боте) | `irresnet_bundle.pt`, `irresnet_training_curve.png` |
-| 07 | `cam_examples` | Grad-CAM | `cam/cam_example_*.png` |
-| 09 | `export_telegram` | Экспорт в `FTIR_telegram_bot/models/` | `v0.1.0.34_model_param`, `*_classes.txt` |
 
 ## Локальный полный цикл
 
@@ -39,13 +36,21 @@ ir-pipeline run list
 
 | Команда | Назначение |
 |---------|------------|
-| `build-dataset` / `build-mini-dataset` | JCAMP → `spectra.npz`, labels, **`telegram_arrays.npz`** |
+| `build-dataset` / `build-mini-dataset` | JCAMP → `spectra.npz`, labels |
 | `train` | sklearn/cuML RandomForest |
-| `torch-train` | 1D CNN регрессия позиций пиков (экспериментальная колея) |
-| `irresnet-train` | IrResnet4 multi-label для Telegram/CAM |
-| `cam-examples` | Grad-CAM картинки |
-| `export-telegram` | Копирование весов в бот |
+| `torch-train` | 1D CNN регрессия позиций пиков |
+| `irresnet-train` | IrResnet4 multi-label (3 канала, `model_inputs.npz`) |
+| `gradcam-examples` | Grad-CAM PNG (авто или `--spectrum-indices`, `--class-indices`) |
 | `predict` | Инференс по JCAMP + PNG |
+
+## Grad-CAM вручную
+
+```bash
+ir-pipeline irresnet-train --paths configs/paths.local.yaml --dataset-version dataset_mini
+ir-pipeline gradcam-examples --run-dir runs/<irresnet_run> --n-examples 3
+ir-pipeline gradcam-examples --run-dir runs/<irresnet_run> \
+  --spectrum-indices 0,5,12 --class-indices 3,12 --output-dir reports/gradcam
+```
 
 ## Логи и «не зависло»
 
@@ -65,9 +70,8 @@ ir-pipeline run list
 - `colab_01_dataset.ipynb` — fetch + preview
 - `colab_02_baseline_rf.ipynb` — RF + метрики
 - `colab_03_train_irresnet4.ipynb` — IrResnet4
-- `colab_04_cam_examples.ipynb` — CAM
-- `colab_05_export_telegram.ipynb` — экспорт в бот
+- `colab_04_gradcam.ipynb` — Grad-CAM
 
 ## Условия измерения (газ / раствор / ATR)
 
-В `meta.parquet`: `measurement_mode`, `sample_state`. RandomForest уже использует one-hot этих полей. Для IrResnet4 каналы совпадают с ботом; доменные различия учитываются через разнообразие обучающей выборки.
+В `meta.parquet`: `measurement_mode`, `sample_state`. RandomForest использует one-hot этих полей.

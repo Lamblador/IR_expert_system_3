@@ -55,15 +55,126 @@ def bootstrap_cell(extra: str = "") -> dict:
     return code(src)
 
 
-def ensure_data_cell() -> dict:
+def md_manual_dataset_upload() -> dict:
+    return md(
+        "## Датасет: загрузка вручную\n\n"
+        "1. **Files → Upload** в Colab: `dataset_v001.zip` / `dataset_mini.zip` в `/content` "
+        "(или положите архив на Google Drive).\n"
+        "2. Выполните ячейку распаковки ниже — ожидается `data/processed/<версия>/spectra.npz`.\n"
+        "3. Если архива нет — следующая ячейка скачает мини-датасет с Hugging Face.\n"
+    )
+
+
+def extract_manual_datasets_cell(
+    versions: tuple[str, ...] = ("dataset_mini", "dataset_v001"),
+) -> dict:
+    versions_literal = repr(versions)
+    return code(
+        "from pathlib import Path\n"
+        "import zipfile\n\n"
+        f"DATASET_VERSIONS = {versions_literal}\n"
+        "SEARCH_ROOTS = [\n"
+        "    Path('/content'),\n"
+        "    Path('/content/IR_expert_system_3'),\n"
+        "    Path('/content/drive/MyDrive'),\n"
+        "    Path('.'),\n"
+        "]\n"
+        "DEST = Path('data/processed')\n"
+        "DEST.mkdir(parents=True, exist_ok=True)\n\n"
+        "def _dataset_ready(name: str) -> bool:\n"
+        "    return (DEST / name / 'spectra.npz').is_file()\n\n"
+        "def _find_zip_archives() -> list[Path]:\n"
+        "    found: list[Path] = []\n"
+        "    seen: set[str] = set()\n"
+        "    for root in SEARCH_ROOTS:\n"
+        "        if not root.exists():\n"
+        "            continue\n"
+        "        for p in root.rglob('*.zip'):\n"
+        "            key = str(p.resolve())\n"
+        "            if key in seen:\n"
+        "                continue\n"
+        "            low = p.name.lower()\n"
+        "            if any(v in low for v in DATASET_VERSIONS):\n"
+        "                seen.add(key)\n"
+        "                found.append(p)\n"
+        "    return sorted(found, key=lambda x: x.stat().st_mtime, reverse=True)\n\n"
+        "archives = _find_zip_archives()\n"
+        "print('Найденные zip с датасетом:')\n"
+        "if archives:\n"
+        "    for p in archives[:15]:\n"
+        "        print(f'  {p} ({p.stat().st_size / 1e6:.1f} MB)')\n"
+        "else:\n"
+        "    print('  (нет — загрузите через Files → Upload)')\n\n"
+        "for version in DATASET_VERSIONS:\n"
+        "    if _dataset_ready(version):\n"
+        "        print(f'OK: {DEST / version} уже распакован')\n"
+        "        continue\n"
+        "    matched = [p for p in archives if version in p.name.lower()]\n"
+        "    if not matched:\n"
+        "        print(f'Пропуск {version}: zip не найден')\n"
+        "        continue\n"
+        "    zp = matched[0]\n"
+        "    print(f'Распаковка {zp.name} → {DEST}')\n"
+        "    with zipfile.ZipFile(zp) as zf:\n"
+        "        zf.extractall(DEST)\n"
+        "    if _dataset_ready(version):\n"
+        "        print(f'  → готово: {DEST / version / \"spectra.npz\"}')\n"
+        "    else:\n"
+        "        print(\n"
+        "            f'  WARNING: после распаковки нет {DEST / version / \"spectra.npz\"}. '\n"
+        "            'Проверьте структуру zip (внутри должна быть папка {version}/).'\n"
+        "        )\n"
+    )
+
+
+def ensure_data_cell(
+    dataset_version: str = "dataset_mini",
+    hf_zip: str | None = None,
+) -> dict:
+    hf_zip = hf_zip or f"{dataset_version}.zip"
     return code(
         "from pathlib import Path\n\n"
-        "DATASET_DIR = Path('data/processed/dataset_mini')\n"
-        "if not DATASET_DIR.exists():\n"
-        "    print('dataset_mini not found → fetching from HF...')\n"
-        "    !ir-pipeline fetch-data --filename dataset_mini.zip --extract-to data/processed\n"
+        f"DATASET_DIR = Path('data/processed/{dataset_version}')\n"
+        "if DATASET_DIR.joinpath('spectra.npz').is_file():\n"
+        "    print(f'OK: {DATASET_DIR}')\n"
         "else:\n"
-        "    print(f'{DATASET_DIR} already exists')\n"
+        f"    print('{dataset_version} not found → fetching from HF...')\n"
+        f"    !ir-pipeline fetch-data --filename {hf_zip} --extract-to data/processed\n"
+    )
+
+
+def md_download_run() -> dict:
+    return md(
+        "## Сохранить обученную модель на локальный ПК\n\n"
+        "Выполните ячейку ниже — браузер скачает zip каталога run "
+        "(`models.joblib`, `metrics.json`, `irresnet_bundle.pt` и т.д.). "
+        "На Windows распакуйте в `runs/<имя>/` и укажите `--run-dir`.\n"
+    )
+
+
+def download_run_zip_cell(run_dir: str, zip_name: str | None = None) -> dict:
+    zip_stem = zip_name or run_dir.replace("\\", "/").strip("/").replace("/", "_")
+    return code(
+        "from pathlib import Path\n"
+        "import shutil\n"
+        "from google.colab import files\n\n"
+        f"RUN_DIR = Path('{run_dir}')\n"
+        "if not RUN_DIR.is_dir():\n"
+        "    raise FileNotFoundError(\n"
+        "        f'Нет {RUN_DIR} — сначала выполните ячейку обучения.'\n"
+        "    )\n\n"
+        "artifacts = [p for p in RUN_DIR.iterdir() if p.is_file()]\n"
+        "if not artifacts:\n"
+        "    raise FileNotFoundError(f'{RUN_DIR} пуст — нечего архивировать.')\n"
+        "print('Файлы:', [p.name for p in sorted(artifacts)])\n\n"
+        f"zip_path = Path('/content/{zip_stem}.zip')\n"
+        "if zip_path.exists():\n"
+        "    zip_path.unlink()\n"
+        "shutil.make_archive(str(zip_path.with_suffix('')), 'zip', RUN_DIR)\n"
+        "size_mb = zip_path.stat().st_size / 1e6\n"
+        "print(f'Архив: {zip_path} ({size_mb:.2f} MB)')\n"
+        "files.download(str(zip_path))\n"
+        "print('Скачивание запущено.')\n"
     )
 
 
@@ -107,113 +218,113 @@ NOTEBOOKS = {
     "colab_00_setup.ipynb": [
         md(
             "# Этап 0: установка (автономный)\n\n"
-            "Этот ноутбук можно запускать отдельно на новом Colab runtime.\n\n"
             "Клонирует репозиторий и ставит зависимости."
         ),
         bootstrap_cell(),
+        md_manual_dataset_upload(),
+        extract_manual_datasets_cell(),
+        ensure_data_cell(),
     ],
     "colab_01_dataset.ipynb": [
-        md(
-            "# Этап 1: датасет (автономный)\n\n"
-            "Сам делает setup + при необходимости скачивает `dataset_mini`."
-        ),
+        md("# Этап 1: датасет и превью (автономный)\n\nSetup + HF fetch + графики spectrum/structure labels."),
         bootstrap_cell(),
+        md_manual_dataset_upload(),
+        extract_manual_datasets_cell(),
         ensure_data_cell(),
         code(
             "from pathlib import Path\nfrom IPython.display import Image, display\n"
-            "from ir_pipeline.dataset_telegram import build_telegram_arrays_from_npz, plot_dataset_preview, save_telegram_npz\n\n"
+            "from ir_pipeline.dataset_preview import plot_dataset_preview\n\n"
             "DATASET_DIR = Path('data/processed/dataset_mini')\n"
-            "if not (DATASET_DIR / 'telegram_arrays.npz').exists():\n"
-            "    X_bot, ids = build_telegram_arrays_from_npz(DATASET_DIR)\n"
-            "    save_telegram_npz(DATASET_DIR, X_bot, ids)\n"
             "plot_dataset_preview(DATASET_DIR, Path('runs/colab_preview/plots'), Path('configs/bands_reference.yaml'))\n"
             "plots = sorted(Path('runs').rglob('preview_spectrum_0.png'))\n"
             "if plots:\n"
             "    display(Image(filename=str(plots[-1]), width=900))\n"
-            "else:\n"
-            "    print('Нет preview PNG — проверьте error_log.txt в stage_03')\n"
         ),
     ],
     "colab_02_baseline_rf.ipynb": [
-        md(
-            "# Этап 2: baseline RandomForest (автономный)\n\n"
-            "Setup + auto-fetch dataset + обучение RF + графики MAE."
-        ),
+        md("# Этап 2: baseline RandomForest (автономный)\n\nSetup + dataset + RF + графики MAE."),
         bootstrap_cell(),
+        md_manual_dataset_upload(),
+        extract_manual_datasets_cell(),
         ensure_data_cell(),
         find_jcamp_or_zip_cell(),
         code(
             "from pathlib import Path\nfrom IPython.display import Image, display\n\n"
             "RUN_DIR = Path('runs/colab_pipeline_rf/rf_run')\n"
-            "# GPU (опционально):\n"
-            "# !pip install -q -e \".[cuml]\"\n"
-            "# import os; os.environ['IR_RF_BACKEND'] = 'cuml'\n\n"
-            "!ir-pipeline train --paths configs/paths.huggingface.yaml --dataset-version dataset_mini --mode spectrum --config configs/train_mini.yaml --run-dir {RUN_DIR}\n"
+            "!ir-pipeline train --paths configs/paths.huggingface.yaml --dataset-version dataset_mini "
+            "--mode spectrum --config configs/train_mini.yaml --run-dir {RUN_DIR}\n"
             "!ir-pipeline plot-train-metrics --run-dir {RUN_DIR}\n\n"
             "for pat in ['metrics_per_band_mae.png', 'metrics_by_group_mae.png']:\n"
             "    hits = sorted(Path('runs').rglob(pat))\n"
             "    if hits:\n"
-            "        print(hits[-1])\n"
             "        display(Image(filename=str(hits[-1]), width=900))\n"
         ),
+        md_download_run(),
+        download_run_zip_cell("runs/colab_pipeline_rf/rf_run", "rf_run_colab"),
     ],
     "colab_03_train_irresnet4.ipynb": [
-        md(
-            "# Этап 3: IrResnet4 (автономный)\n\n"
-            "Setup + auto-fetch dataset + обучение классификационной модели."
-        ),
+        md("# Этап 3: IrResnet4 multi-label (автономный)\n\n3-канальный вход 400–4000 см⁻¹ + контекст ATR/gas/solution."),
         bootstrap_cell(),
+        md_manual_dataset_upload(),
+        extract_manual_datasets_cell(),
         ensure_data_cell(),
         code(
             "from pathlib import Path\nfrom IPython.display import Image, display\n\n"
             "RUN_DIR = Path('runs/colab_pipeline_irresnet/irresnet_run')\n"
-            "!ir-pipeline irresnet-train --paths configs/paths.huggingface.yaml --dataset-version dataset_mini --config configs/train_irresnet.yaml --run-dir {RUN_DIR}\n\n"
+            "!ir-pipeline irresnet-train --paths configs/paths.huggingface.yaml "
+            "--dataset-version dataset_mini --config configs/train_irresnet.yaml --run-dir {RUN_DIR}\n\n"
             "hits = sorted(Path('runs').rglob('irresnet_training_curve.png'))\n"
             "if hits:\n"
             "    display(Image(filename=str(hits[-1]), width=900))\n"
         ),
+        md_download_run(),
+        download_run_zip_cell("runs/colab_pipeline_irresnet/irresnet_run", "irresnet_run_colab"),
     ],
-    "colab_04_cam_examples.ipynb": [
+    "colab_04_gradcam.ipynb": [
         md(
-            "# Этап 4: Grad-CAM (автономный)\n\n"
-            "Setup + auto-fetch dataset + при отсутствии модели сначала тренирует IrResnet4."
+            "# Этап 4: Grad-CAM вручную (автономный)\n\n"
+            "Наложение карт важности на спектр. Можно задать индексы спектров и классов."
         ),
         bootstrap_cell(),
+        md_manual_dataset_upload(),
+        extract_manual_datasets_cell(),
         ensure_data_cell(),
         code(
             "from pathlib import Path\nfrom IPython.display import Image, display\n\n"
-            "PIPELINE_RUN = Path('runs/colab_pipeline_cam')\n"
+            "PIPELINE_RUN = Path('runs/colab_pipeline_gradcam')\n"
             "bundles = sorted(Path('runs').rglob('irresnet_bundle.pt'))\n"
             "if not bundles:\n"
-            "    print('No irresnet bundle found, training one...')\n"
-            "    !ir-pipeline irresnet-train --paths configs/paths.huggingface.yaml --dataset-version dataset_mini --config configs/train_irresnet.yaml --run-dir {PIPELINE_RUN / 'irresnet_run'}\n"
+            "    print('Нет обученной модели — тренируем...')\n"
+            "    !ir-pipeline irresnet-train --paths configs/paths.huggingface.yaml "
+            "--dataset-version dataset_mini --config configs/train_irresnet.yaml "
+            "--run-dir {PIPELINE_RUN / 'irresnet_run'}\n"
             "    bundles = sorted(Path('runs').rglob('irresnet_bundle.pt'))\n\n"
             "IR_RUN = bundles[-1].parent\n"
-            "print('Using', IR_RUN)\n"
-            "!ir-pipeline cam-examples --paths configs/paths.huggingface.yaml --run-dir {IR_RUN} --output-dir reports/colab_cam\n\n"
-            "for p in sorted(Path('reports/colab_cam').glob('cam_example_*.png'))[:3]:\n"
+            "OUT = Path('reports/colab_gradcam')\n"
+            "# Авто: первые 3 спектра. Ручной режим — раскомментируйте:\n"
+            "# !ir-pipeline gradcam-examples --paths configs/paths.huggingface.yaml --run-dir {IR_RUN} "
+            "--output-dir {OUT} --spectrum-indices 0,7,15 --class-indices 3,12\n"
+            "!ir-pipeline gradcam-examples --paths configs/paths.huggingface.yaml "
+            "--run-dir {IR_RUN} --output-dir {OUT} --n-examples 3\n\n"
+            "for p in sorted(OUT.glob('gradcam_*.png'))[:3]:\n"
             "    display(Image(filename=str(p), width=900))\n"
         ),
-    ],
-    "colab_05_export_telegram.ipynb": [
-        md(
-            "# Этап 5: экспорт в Telegram-бот (автономный)\n\n"
-            "Setup + auto-fetch dataset + при отсутствии модели сначала тренирует IrResnet4."
-        ),
-        bootstrap_cell(),
-        ensure_data_cell(),
+        md_download_run(),
         code(
-            "from pathlib import Path\n\n"
+            "from pathlib import Path\n"
+            "import shutil\n"
+            "from google.colab import files\n\n"
             "bundles = sorted(Path('runs').rglob('irresnet_bundle.pt'))\n"
             "if not bundles:\n"
-            "    print('No irresnet bundle found, training one...')\n"
-            "    !ir-pipeline irresnet-train --paths configs/paths.huggingface.yaml --dataset-version dataset_mini --config configs/train_irresnet.yaml --run-dir runs/colab_pipeline_export/irresnet_run\n"
-            "    bundles = sorted(Path('runs').rglob('irresnet_bundle.pt'))\n\n"
-            "IR_RUN = bundles[-1].parent\n"
-            "TARGET = Path('/content/drive/MyDrive/ftir_bot_models')  # поправьте под свой путь\n"
-            "TARGET.mkdir(parents=True, exist_ok=True)\n"
-            "!ir-pipeline export-telegram --run-dir {IR_RUN} --target-dir {TARGET}\n"
-            "print('Files:', list(TARGET.rglob('*_model_param')))\n"
+            "    raise FileNotFoundError('Нет irresnet_bundle.pt — сначала обучите модель.')\n"
+            "RUN_DIR = bundles[-1].parent\n"
+            "print('Run dir:', RUN_DIR)\n\n"
+            "zip_path = Path('/content/irresnet_gradcam_run_colab.zip')\n"
+            "if zip_path.exists():\n"
+            "    zip_path.unlink()\n"
+            "shutil.make_archive(str(zip_path.with_suffix('')), 'zip', RUN_DIR)\n"
+            "print(f'Архив: {zip_path} ({zip_path.stat().st_size / 1e6:.2f} MB)')\n"
+            "files.download(str(zip_path))\n"
         ),
     ],
 }

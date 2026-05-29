@@ -1,4 +1,4 @@
-"""1D ResNet для multi-label классификации ИК-спектров (совместим с FTIR Telegram-ботом)."""
+"""1D ResNet для multi-label классификации ИК-спектров (3 канала, 400–4000 см⁻¹)."""
 
 from __future__ import annotations
 
@@ -35,9 +35,15 @@ class BasicBlock(nn.Module):
 
 
 class IrResnet4(nn.Module):
-    def __init__(self, hidden_size: int = 34, class_nums: int = 17):
+    """
+    Вход: (B, 3, L), L=1801 для сетки 400–4000 см⁻¹, шаг 2.
+    Опционально context (B, C): one-hot техники измерения + фазы образца, конкатенируется перед FC.
+    """
+
+    def __init__(self, hidden_size: int = 34, class_nums: int = 17, context_dim: int = 0):
         super().__init__()
         self.hidden_size = hidden_size
+        self.context_dim = int(context_dim)
         h = hidden_size
         self.conv1 = nn.Conv1d(3, h, kernel_size=3, stride=2, padding=1)
         self.bn1 = nn.BatchNorm1d(h)
@@ -61,20 +67,28 @@ class IrResnet4(nn.Module):
         )
         self.flatten = nn.Flatten()
         self.do1 = nn.Dropout1d(0.5)
-        self.fc = nn.Linear(h * 8 * 56, 200)
+        flat_dim = h * 8 * 56
+        self.fc = nn.Linear(flat_dim + self.context_dim, 200)
         self.do2 = nn.Dropout1d(0.2)
         self.relu1 = nn.ReLU()
         self.fc1 = nn.Linear(200, class_nums)
 
-    def forward(self, batch: torch.Tensor) -> torch.Tensor:
+    def encode_spectrum(self, batch: torch.Tensor) -> torch.Tensor:
         batch = self.relu(self.bn1(self.conv1(batch)))
         batch = self.layer1(batch)
         batch = self.layer3(batch)
         batch = self.layer5(batch)
         batch = self.max3(batch)
         batch = self.layer7(batch)
-        batch = self.flatten(batch)
+        return self.flatten(batch)
+
+    def forward(self, batch: torch.Tensor, context: torch.Tensor | None = None) -> torch.Tensor:
+        batch = self.encode_spectrum(batch)
         batch = self.do1(batch)
+        if self.context_dim > 0:
+            if context is None:
+                raise ValueError(f"Ожидается context размерности {self.context_dim}")
+            batch = torch.cat([batch, context], dim=1)
         batch = self.fc(batch)
         batch = self.do2(batch)
         batch = self.relu1(batch)
