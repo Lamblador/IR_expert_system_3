@@ -130,7 +130,7 @@ def run_stage(
                 metrics = train_models(
                     dataset_dir=ds_dir,
                     run_dir=rd,
-                    mode=str(defaults.get("rf_mode", "spectrum")),
+                    mode=str(defaults.get("rf_mode", "spectrum_structure")),
                     train_cfg=train_cfg,
                     random_seed=int(train_cfg["random_seed"]),
                     train_frac=float(train_cfg["train_frac"]),
@@ -147,7 +147,7 @@ def run_stage(
 
             elif stage_key == "evaluate_rf":
                 rf_run = Path(state.get("rf_run_dir", stage_dir / "rf_run"))
-                summary = evaluate_run(ds_dir, rf_run, mode=str(defaults.get("rf_mode", "spectrum")))
+                summary = evaluate_run(ds_dir, rf_run, mode=str(defaults.get("rf_mode", "spectrum_structure")))
                 (stage_dir / "eval_report.json").write_text(
                     json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
                 )

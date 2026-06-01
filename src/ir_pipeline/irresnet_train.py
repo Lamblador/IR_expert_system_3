@@ -62,7 +62,7 @@ def train_irresnet_run(
     train_cfg: dict[str, Any],
     *,
     device: str | None = None,
-    label_schema: str = "spectrum",
+    label_schema: str = "structure",
     peak_threshold: float = 0.1,
     use_measurement_context: bool | None = None,
 ) -> dict[str, Any]:

@@ -1,4 +1,4 @@
-# Colab: IrResnet4 с live-графиками и расширенными гиперпараметрами (см. colab_03).
+# Colab: IrResnet4 с live-графиками (метки SMARTS: CLI --label-schema structure по умолчанию).
 random_seed: 42
 train_frac: 0.85
 torch_epochs: 30

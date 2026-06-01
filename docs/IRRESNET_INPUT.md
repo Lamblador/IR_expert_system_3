@@ -42,6 +42,7 @@
 ```bash
 # пересоздать model_inputs.npz (новая сетка + контекст)
 ir-pipeline irresnet-train --paths configs/paths.local.yaml --dataset-version dataset_v001
+# по умолчанию --label-schema structure (SMARTS); спектральные метки: --label-schema spectrum
 
 ir-pipeline gradcam-examples --run-dir runs/<irresnet_run> --paths configs/paths.local.yaml
 ```

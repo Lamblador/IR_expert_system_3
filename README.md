@@ -38,7 +38,7 @@ Google Colab (минимум):
 !pip install -e .
 # без токена, если репозиторий публичный:
 !ir-pipeline fetch-data --filename dataset_mini.zip --extract-to data/processed
-!ir-pipeline train --paths configs/paths.huggingface.yaml --mode spectrum --config configs/train_mini.yaml --run-dir runs/mini01
+!ir-pipeline train --paths configs/paths.huggingface.yaml --config configs/train_mini.yaml --run-dir runs/mini01
 ```
 
 Чтобы **`ir-pipeline train` использовал GPU** (RandomForest на CUDA через [RAPIDS cuML](https://docs.rapids.ai/api/cuml/stable/)), включите **Runtime → GPU**, затем установите cuML и при необходимости зафиксируйте бэкенд:
@@ -125,9 +125,10 @@ ir-pipeline fetch-data --filename dataset_mini.zip --extract-to data/processed
 ir-pipeline plot-train-metrics --run-dir runs/colab_cpu_rf
 
 # Обучение RandomForest (режим только спектр или спектр + SMARTS-маска)
-ir-pipeline train --paths configs/paths.huggingface.yaml --mode spectrum --config configs/train_mini.yaml --run-dir runs/mini01
+ir-pipeline train --paths configs/paths.huggingface.yaml --config configs/train_mini.yaml --run-dir runs/mini01
+ir-pipeline train --paths configs/paths.local.yaml --dataset-version dataset_v001 --config configs/train_smoke.yaml
+# только пики в регионе без SMARTS:
 ir-pipeline train --paths configs/paths.local.yaml --dataset-version dataset_v001 --mode spectrum --config configs/train_smoke.yaml
-ir-pipeline train --paths configs/paths.local.yaml --dataset-version dataset_v001 --mode spectrum_structure --config configs/train_smoke.yaml
 
 # Оценка
 ir-pipeline evaluate --paths configs/paths.local.yaml --dataset-version dataset_v001 --run-dir runs/run_001
@@ -136,7 +137,7 @@ ir-pipeline evaluate --paths configs/paths.local.yaml --dataset-version dataset_
 ir-pipeline predict --paths configs/paths.local.yaml --jcamp path/to/file --run-dir runs/run_001 --output-dir reports/out
 
 # PyTorch: многозадачная 1D CNN по позициям пиков (после pip install -e ".[torch]")
-ir-pipeline torch-train --paths configs/paths.local.yaml --dataset-version dataset_smoke --mode spectrum --config configs/train_smoke.yaml
+ir-pipeline torch-train --paths configs/paths.local.yaml --dataset-version dataset_smoke --config configs/train_smoke.yaml
 # → torch_bundle.pt, torch_training_curve.png, torch_history.json
 
 ir-pipeline predict ... --run-dir runs/<torch_run> --torch --output-dir reports/out_torch

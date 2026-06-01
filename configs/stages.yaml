@@ -4,6 +4,7 @@
 defaults:
   paths: configs/paths.huggingface.yaml
   dataset_version: dataset_mini
+  rf_mode: spectrum_structure
   train_config: configs/train_mini.yaml
   train_config_torch: configs/train_mini.yaml
   preview_n_examples: 3

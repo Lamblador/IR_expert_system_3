@@ -279,8 +279,9 @@ def resolve_missing_structures_cmd(paths: Path, dataset_version: str | None, pub
 @click.option(
     "--mode",
     type=click.Choice(["spectrum", "spectrum_structure"]),
-    default="spectrum",
+    default="spectrum_structure",
     show_default=True,
+    help="spectrum_structure = метки только при совпадении SMARTS (labels_structure.parquet)",
 )
 @click.option("--run-dir", type=click.Path(path_type=Path), default=None)
 def train_cmd(paths: Path, dataset_version: str | None, config: Path, mode: str, run_dir: Path | None):
@@ -320,7 +321,12 @@ def plot_train_metrics_cmd(run_dir: Path, bands: Path, output_dir: Path | None):
 @click.option("--paths", type=click.Path(exists=True, path_type=Path), default=Path("configs/paths.local.yaml"))
 @click.option("--dataset-version", type=str, default=None)
 @click.option("--run-dir", type=click.Path(exists=True, path_type=Path), required=True)
-@click.option("--mode", type=click.Choice(["spectrum", "spectrum_structure"]), required=True)
+@click.option(
+    "--mode",
+    type=click.Choice(["spectrum", "spectrum_structure"]),
+    default="spectrum_structure",
+    show_default=True,
+)
 def evaluate_cmd(paths: Path, dataset_version: str | None, run_dir: Path, mode: str):
     paths_cfg = load_yaml(paths)
     p = resolve_paths(paths_cfg)
@@ -359,8 +365,9 @@ def predict_cmd(paths: Path, jcamp: Path, run_dir: Path, output_dir: Path, use_t
 @click.option(
     "--mode",
     type=click.Choice(["spectrum", "spectrum_structure"]),
-    default="spectrum",
+    default="spectrum_structure",
     show_default=True,
+    help="spectrum_structure = регрессия пиков по labels_structure.parquet (SMARTS)",
 )
 @click.option("--run-dir", type=click.Path(path_type=Path), default=None)
 @click.option("--device", type=str, default=None, help="cuda | cpu | пусто=авто")
@@ -406,8 +413,9 @@ def torch_train_cmd(
 @click.option(
     "--label-schema",
     type=click.Choice(["spectrum", "structure"]),
-    default="spectrum",
+    default="structure",
     show_default=True,
+    help="structure = multi-label по SMARTS (labels_structure.parquet); spectrum = все пики в регионе",
 )
 def irresnet_train_cmd(
     paths: Path,

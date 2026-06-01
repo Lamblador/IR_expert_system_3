@@ -37,9 +37,9 @@ ir-pipeline run list
 | Команда | Назначение |
 |---------|------------|
 | `build-dataset` / `build-mini-dataset` | JCAMP → `spectra.npz`, labels |
-| `train` | sklearn/cuML RandomForest |
-| `torch-train` | 1D CNN регрессия позиций пиков |
-| `irresnet-train` | IrResnet4 multi-label (3 канала, `model_inputs.npz`) |
+| `train` | sklearn/cuML RandomForest (**по умолчанию** `spectrum_structure` → SMARTS) |
+| `torch-train` | 1D CNN (**по умолчанию** `spectrum_structure` → `labels_structure.parquet`) |
+| `irresnet-train` | IrResnet4 multi-label (**по умолчанию** `--label-schema structure`) |
 | `gradcam-examples` | Grad-CAM PNG (авто или `--spectrum-indices`, `--class-indices`) |
 | `predict` | Инференс по JCAMP + PNG |
 
