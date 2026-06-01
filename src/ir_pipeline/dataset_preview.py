@@ -15,6 +15,20 @@ import pandas as pd
 from ir_pipeline.bands import load_bands
 from ir_pipeline.preprocess import validate_absorbance_spectrum
 
+LABEL_SCHEMA_FILES = {
+    "spectrum": "labels_spectrum.parquet",
+    "structure": "labels_structure.parquet",
+    "structure_smarts": "labels_structure_smarts.parquet",
+}
+
+
+def labels_parquet_path(dataset_dir: Path, label_schema: str) -> Path:
+    """Путь к parquet-файлу меток для схемы spectrum | structure | structure_smarts."""
+    name = LABEL_SCHEMA_FILES.get(label_schema)
+    if not name:
+        raise ValueError(f"Неизвестная label_schema={label_schema!r}; допустимо: {list(LABEL_SCHEMA_FILES)}")
+    return dataset_dir / name
+
 
 def build_multilabel_matrix(
     dataset_dir: Path,
@@ -23,18 +37,25 @@ def build_multilabel_matrix(
     *,
     label_schema: str = "spectrum",
 ) -> tuple[np.ndarray, list[str]]:
-    """Y (N, C): метка 1, если observed_peak_cm1 задан для полосы."""
-    label_file = dataset_dir / (
-        "labels_spectrum.parquet" if label_schema == "spectrum" else "labels_structure.parquet"
-    )
+    """
+    Y (N, C) multi-label матрица.
+    - spectrum / structure: 1, если observed_peak_cm1 задан;
+    - structure_smarts: 1 по факту строки (SMARTS-only, пик не обязателен).
+    """
+    label_file = labels_parquet_path(dataset_dir, label_schema)
+    if not label_file.exists():
+        raise FileNotFoundError(f"Нет файла меток: {label_file}")
     labels = pd.read_parquet(label_file)
     bands = load_bands(bands_yaml)
     class_names = [b.band_id for b in bands]
     band_to_idx = {b: i for i, b in enumerate(class_names)}
     Y = np.zeros((len(spectrum_ids), len(class_names)), dtype=np.float32)
     sid_to_i = {s: i for i, s in enumerate(spectrum_ids)}
-    pos = labels.dropna(subset=["observed_peak_cm1"])
-    for _, r in pos.iterrows():
+    if label_schema == "structure_smarts":
+        rows = labels
+    else:
+        rows = labels.dropna(subset=["observed_peak_cm1"])
+    for _, r in rows.iterrows():
         sid = str(r["spectrum_id"])
         bid = str(r["band_id"])
         if sid not in sid_to_i or bid not in band_to_idx:
@@ -85,6 +106,8 @@ def plot_dataset_preview(
     labels_spec = pd.read_parquet(dataset_dir / "labels_spectrum.parquet")
     labels_str_path = dataset_dir / "labels_structure.parquet"
     labels_str = pd.read_parquet(labels_str_path) if labels_str_path.exists() else pd.DataFrame()
+    labels_smarts_path = dataset_dir / "labels_structure_smarts.parquet"
+    labels_smarts = pd.read_parquet(labels_smarts_path) if labels_smarts_path.exists() else pd.DataFrame()
 
     preview_qc: list[dict[str, object]] = []
 
@@ -102,7 +125,10 @@ def plot_dataset_preview(
         else:
             sub_str = pd.DataFrame()
 
-        fig, axes = plt.subplots(3, 1, figsize=(11, 8), sharex=True)
+        n_panels = 4 if not labels_smarts.empty else 3
+        fig, axes = plt.subplots(n_panels, 1, figsize=(11, 2.5 * n_panels), sharex=True)
+        if n_panels == 1:
+            axes = [axes]
         title = str(row.get("title", sid))
         qc_tag = "" if qc.get("ok") else f" [QC: {','.join(qc.get('issues', []))}]"
         axes[0].plot(wn, ab, "k-", lw=0.85)
@@ -117,10 +143,26 @@ def plot_dataset_preview(
 
         axes[2].plot(wn, ab, "k-", lw=0.7)
         n_str = _plot_peak_labels(axes[2], sub_str, color="tab:blue")
-        axes[2].set_ylabel(f"structure labels (n={n_str})")
-        axes[2].set_xlim(float(np.max(wn)), float(np.min(wn)))
-        axes[2].set_xlabel(r"Wavenumber (cm$^{-1}$)")
+        axes[2].set_ylabel(f"structure+peak (n={n_str})")
         axes[2].grid(alpha=0.2)
+
+        if n_panels == 4:
+            if not labels_smarts.empty:
+                sub_smarts = labels_smarts[labels_smarts["spectrum_id"] == sid]
+                peak_col = "optional_peak_cm1" if "optional_peak_cm1" in sub_smarts.columns else "observed_peak_cm1"
+                sub_smarts_plot = sub_smarts[sub_smarts[peak_col].notna()].copy()
+                sub_smarts_plot = sub_smarts_plot.rename(columns={peak_col: "observed_peak_cm1"})
+            else:
+                sub_smarts_plot = pd.DataFrame()
+            axes[3].plot(wn, ab, "k-", lw=0.7)
+            n_sm = _plot_peak_labels(axes[3], sub_smarts_plot, color="tab:green")
+            axes[3].set_ylabel(f"SMARTS-only ref peaks (n={n_sm})")
+            axes[3].set_xlim(float(np.max(wn)), float(np.min(wn)))
+            axes[3].set_xlabel(r"Wavenumber (cm$^{-1}$)")
+            axes[3].grid(alpha=0.2)
+        else:
+            axes[2].set_xlim(float(np.max(wn)), float(np.min(wn)))
+            axes[2].set_xlabel(r"Wavenumber (cm$^{-1}$)")
 
         fig.tight_layout()
         p = out_dir / f"preview_spectrum_{plot_i}.png"
@@ -153,11 +195,15 @@ def plot_dataset_preview(
     written.append(p2)
 
     Y_str, _ = build_multilabel_matrix(dataset_dir, spec_ids_npz, bands_yaml, label_schema="structure")
-    stats = {
+    stats: dict[str, object] = {
         "n_spectra": len(spec_ids_npz),
         "n_classes": len(class_names),
         "mean_labels_spectrum_per_spectrum": float(Y.sum(axis=1).mean()),
         "mean_labels_structure_per_spectrum": float(Y_str.sum(axis=1).mean()),
     }
+    smarts_path = dataset_dir / "labels_structure_smarts.parquet"
+    if smarts_path.exists():
+        Y_sm, _ = build_multilabel_matrix(dataset_dir, spec_ids_npz, bands_yaml, label_schema="structure_smarts")
+        stats["mean_labels_structure_smarts_per_spectrum"] = float(Y_sm.sum(axis=1).mean())
     (out_dir / "preview_stats.json").write_text(json.dumps(stats, indent=2), encoding="utf-8")
     return written

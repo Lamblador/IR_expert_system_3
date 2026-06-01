@@ -82,7 +82,8 @@ os.environ["HF_TOKEN"] = userdata.get("HF_TOKEN")
 После `build-dataset` в `data/processed/<dataset_version>/` появляются:
 
 - `spectra.npz`: `X` (нормализованный спектр), `X_absorbance_corrected`, `X_absorbance_like_interp`, `coverage`, `wavenumbers`
-- `meta.parquet`, `labels_spectrum.parquet`, `labels_structure.parquet`, `unresolved_structures.parquet`
+- `meta.parquet`, `labels_spectrum.parquet`, `labels_structure.parquet`, `labels_structure_smarts.parquet`, `unresolved_structures.parquet`
+- **Схемы меток:** `spectrum` — пик в регионе; `structure` — SMARTS + пик; `structure_smarts` — только SMARTS (пик в `optional_peak_cm1` для справки)
 - `structure_cache.parquet`, `split.json` (фиксированное разбиение для обучения/валидации), `manifest.json`
 
 ## Этапы пайплайна (оркестратор)

@@ -53,7 +53,7 @@ def md_cnn_hyperparameters() -> dict:
         "| **Learning rate** | `torch_lr: 0.001` | тот же yaml |\n"
         "| **Batch size** | `torch_batch_size: 32` | тот же yaml |\n"
         "| **Оптимизатор** | `torch_optimizer: adamw` | `adamw` \\| `adam` \\| `sgd` |\n"
-        "| **Метки** | `label_schema: structure` (SMARTS) | `--label-schema spectrum` для спектральных меток |\n"
+        "| **Метки** | `structure` / `structure_smarts` / `spectrum` | `--label-schema` в CLI или kwarg в `train_irresnet_run` |\n"
         "| **Loss (IrResnet)** | `torch_loss: bce_with_logits` | multi-label BCE с logits |\n"
         "| **Loss (torch-train 1D CNN)** | `smooth_l1` | в `configs/train_torch_colab.yaml`: `smooth_l1` или `mse` |\n"
         "| **Размер скрытого слоя** | `ir_hidden_size: 34` | только IrResnet |\n"
@@ -308,13 +308,22 @@ NOTEBOOKS = {
         ensure_data_cell(),
         md_cnn_hyperparameters(),
         code(
-            "from pathlib import Path\nfrom IPython.display import Image, display\n\n"
+            "%matplotlib inline\n"
+            "from pathlib import Path\n"
+            "from ir_pipeline.config_loader import load_yaml, merge_train_defaults, resolve_paths\n"
+            "from ir_pipeline.irresnet_train import train_irresnet_run\n\n"
+            "paths = resolve_paths(load_yaml('configs/paths.huggingface.yaml'))\n"
+            "train_cfg = merge_train_defaults(load_yaml('configs/train_irresnet_colab.yaml'))\n"
+            "DATASET = paths['processed_root'] / 'dataset_v002'  # или dataset_mini\n"
             "RUN_DIR = Path('runs/colab_pipeline_irresnet/irresnet_run')\n"
-            "!ir-pipeline irresnet-train --paths configs/paths.huggingface.yaml "
-            "--dataset-version dataset_mini --config configs/train_irresnet_colab.yaml --run-dir {RUN_DIR}\n\n"
-            "hits = sorted(Path('runs').rglob('irresnet_training_curve.png'))\n"
-            "if hits:\n"
-            "    display(Image(filename=str(hits[-1]), width=900))\n"
+            "summary = train_irresnet_run(\n"
+            "    dataset_dir=DATASET,\n"
+            "    run_dir=RUN_DIR,\n"
+            "    bands_yaml=paths['bands_config'],\n"
+            "    train_cfg=train_cfg,\n"
+            "    label_schema='structure_smarts',\n"
+            ")\n"
+            "print(summary)\n"
         ),
         md_download_run(),
         download_run_zip_cell("runs/colab_pipeline_irresnet/irresnet_run", "irresnet_run_colab"),
@@ -365,6 +374,88 @@ NOTEBOOKS = {
             "shutil.make_archive(str(zip_path.with_suffix('')), 'zip', RUN_DIR)\n"
             "print(f'Архив: {zip_path} ({zip_path.stat().st_size / 1e6:.2f} MB)')\n"
             "files.download(str(zip_path))\n"
+        ),
+    ],
+    "colab_05_irresnet_experiments.ipynb": [
+        md(
+            "# Этап 5: сравнение IrResnet4 (hidden=72)\n\n"
+            "E1–E4: SMARTS-only vs SMARTS+peak × контекст измерения on/off.\n"
+            "Требуется `dataset_v002` с `labels_structure_smarts.parquet`."
+        ),
+        bootstrap_cell(),
+        mount_google_drive_cell(),
+        md_manual_dataset_upload(),
+        extract_manual_datasets_cell(),
+        ensure_data_cell(),
+        code("%matplotlib inline\n"),
+        code(
+            "from pathlib import Path\n"
+            "import json\n"
+            "import pandas as pd\n"
+            "from ir_pipeline.config_loader import load_yaml, merge_train_defaults, resolve_paths\n"
+            "from ir_pipeline.dataset_preview import build_multilabel_matrix\n"
+            "from ir_pipeline.resnet_input import load_model_inputs\n\n"
+            "paths = resolve_paths(load_yaml('configs/paths.huggingface.yaml'))\n"
+            "DATASET = paths['processed_root'] / 'dataset_v002'\n"
+            "_, _, spec_ids, _, _ = load_model_inputs(DATASET)\n"
+            "bands = paths['bands_config']\n"
+            "rows = []\n"
+            "for schema in ['structure_smarts', 'structure', 'spectrum']:\n"
+            "    try:\n"
+            "        Y, _ = build_multilabel_matrix(DATASET, spec_ids, bands, label_schema=schema)\n"
+            "        rows.append({'schema': schema, 'mean_labels': float(Y.sum(axis=1).mean()), 'positives': int(Y.sum())})\n"
+            "    except FileNotFoundError as e:\n"
+            "        rows.append({'schema': schema, 'error': str(e)})\n"
+            "pd.DataFrame(rows)\n"
+        ),
+        code(
+            "from copy import deepcopy\n"
+            "from pathlib import Path\n"
+            "from ir_pipeline.irresnet_train import train_irresnet_run\n\n"
+            "base_cfg = merge_train_defaults(load_yaml('configs/train_irresnet_experiments.yaml'))\n"
+            "EXPERIMENTS = [\n"
+            "    ('E1', 'structure_smarts', False),\n"
+            "    ('E2', 'structure', False),\n"
+            "    ('E3', 'structure_smarts', True),\n"
+            "    ('E4', 'structure', True),\n"
+            "]\n"
+            "summaries = []\n"
+            "for exp_id, schema, use_ctx in EXPERIMENTS:\n"
+            "    cfg = deepcopy(base_cfg)\n"
+            "    cfg['use_measurement_context'] = use_ctx\n"
+            "    run_dir = Path('runs/exp_v002') / f'{exp_id.lower()}_h72_{\"ctx\" if use_ctx else \"noctx\"}_{schema}'\n"
+            "    print('===', exp_id, schema, 'context=', use_ctx, '=>', run_dir)\n"
+            "    s = train_irresnet_run(\n"
+            "        dataset_dir=DATASET,\n"
+            "        run_dir=run_dir,\n"
+            "        bands_yaml=bands,\n"
+            "        train_cfg=cfg,\n"
+            "        label_schema=schema,\n"
+            "        use_measurement_context=use_ctx,\n"
+            "    )\n"
+            "    s['experiment'] = exp_id\n"
+            "    summaries.append(s)\n"
+            "pd.DataFrame(summaries)\n"
+        ),
+        code(
+            "import matplotlib.pyplot as plt\n"
+            "from pathlib import Path\n"
+            "import pandas as pd\n\n"
+            "df = pd.DataFrame(summaries)\n"
+            "out = Path('runs/exp_v002')\n"
+            "out.mkdir(parents=True, exist_ok=True)\n"
+            "(out / 'summary.json').write_text(df.to_json(orient='records', indent=2), encoding='utf-8')\n"
+            "fig, ax = plt.subplots(figsize=(8, 4))\n"
+            "x = range(len(df))\n"
+            "ax.bar(x, df['test_f1_weighted'], color='steelblue')\n"
+            "ax.set_xticks(list(x))\n"
+            "ax.set_xticklabels(df['experiment'], rotation=0)\n"
+            "ax.set_ylabel('test F1 weighted')\n"
+            "ax.set_title('IrResnet4 experiments (hidden=72)')\n"
+            "fig.tight_layout()\n"
+            "fig.savefig(out / 'experiments_f1_weighted.png', dpi=140)\n"
+            "plt.show()\n"
+            "df\n"
         ),
     ],
 }

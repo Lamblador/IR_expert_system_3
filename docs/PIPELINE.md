@@ -39,7 +39,8 @@ ir-pipeline run list
 | `build-dataset` / `build-mini-dataset` | JCAMP → `spectra.npz`, labels |
 | `train` | sklearn/cuML RandomForest (**по умолчанию** `spectrum_structure` → SMARTS) |
 | `torch-train` | 1D CNN (**по умолчанию** `spectrum_structure` → `labels_structure.parquet`) |
-| `irresnet-train` | IrResnet4 multi-label (**по умолчанию** `--label-schema structure`) |
+| `irresnet-train` | IrResnet4 multi-label (`--label-schema structure` \| `structure_smarts` \| `spectrum`) |
+| `dataset-audit-duplicates` | Отчёт о дублях (без удаления) |
 | `gradcam-examples` | Grad-CAM PNG (авто или `--spectrum-indices`, `--class-indices`) |
 | `predict` | Инференс по JCAMP + PNG |
 

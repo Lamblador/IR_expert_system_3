@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from sklearn.metrics import classification_report, f1_score
 from tqdm import tqdm
 
 from ir_pipeline.dataset_preview import build_multilabel_matrix
@@ -32,6 +33,54 @@ except ImportError:
 
 def is_torch_available() -> bool:
     return torch is not None
+
+
+def multilabel_f1_scores(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
+    """sklearn F1 для multi-label (порог уже применён к y_pred)."""
+    yt = y_true.astype(np.int32)
+    yp = y_pred.astype(np.int32)
+    return {
+        "f1_micro": float(f1_score(yt, yp, average="micro", zero_division=0)),
+        "f1_macro": float(f1_score(yt, yp, average="macro", zero_division=0)),
+        "f1_weighted": float(f1_score(yt, yp, average="weighted", zero_division=0)),
+        "f1_samples": float(f1_score(yt, yp, average="samples", zero_division=0)),
+    }
+
+
+def _eval_loader(
+    model: Any,
+    dl_te: Any,
+    criterion: Any,
+    dev: str,
+    context_dim: int,
+    forward_fn: Any,
+) -> tuple[float, dict[str, float], np.ndarray, np.ndarray]:
+    assert torch is not None
+    model.eval()
+    vl = 0.0
+    vn = 0
+    preds_list: list[np.ndarray] = []
+    labels_list: list[np.ndarray] = []
+    with torch.no_grad():
+        for batch in dl_te:
+            if context_dim:
+                xb, cb, yb = batch
+                cb = cb.to(dev)
+            else:
+                xb, yb = batch
+                cb = None
+            xb, yb = xb.to(dev), yb.to(dev)
+            logits = forward_fn(xb, cb)
+            loss = criterion(logits, yb)
+            vl += float(loss.item()) * len(xb)
+            vn += len(xb)
+            prob = torch.sigmoid(logits).cpu().numpy()
+            preds_list.append((prob > 0.5).astype(np.float32))
+            labels_list.append(yb.cpu().numpy())
+    val_loss = vl / max(vn, 1)
+    y_true = np.vstack(labels_list) if labels_list else np.zeros((0, 1), dtype=np.float32)
+    y_pred = np.vstack(preds_list) if preds_list else np.zeros((0, 1), dtype=np.float32)
+    return val_loss, multilabel_f1_scores(y_true, y_pred), y_true, y_pred
 
 
 if torch is not None:
@@ -135,9 +184,19 @@ def train_irresnet_run(
     dl_tr = DataLoader(ds_tr, batch_size=bs, shuffle=True, drop_last=len(ds_tr) > bs)
     dl_te = DataLoader(ds_te, batch_size=min(bs, len(ds_te)), shuffle=False)
 
-    history: dict[str, list[float]] = {"train_loss": [], "val_loss": [], "val_f1_macro": []}
-    best_val = float("inf")
+    history: dict[str, list[float]] = {
+        "train_loss": [],
+        "val_loss": [],
+        "val_f1_micro": [],
+        "val_f1_macro": [],
+        "val_f1_weighted": [],
+        "val_f1_samples": [],
+    }
+    early_metric = str(train_cfg.get("early_stop_metric", "val_f1_weighted"))
+    best_score = float("-inf")
+    best_val_loss = float("inf")
     best_state = None
+    best_epoch = 0
 
     def _forward_batch(xb: torch.Tensor, cb: torch.Tensor | None) -> torch.Tensor:
         if context_dim:
@@ -165,49 +224,53 @@ def train_irresnet_run(
                 tn += len(xb)
             train_loss = tl / max(tn, 1)
 
-            model.eval()
-            vl = 0.0
-            vn = 0
-            tp = fp = fn = 0.0
-            with torch.no_grad():
-                for batch in dl_te:
-                    if context_dim:
-                        xb, cb, yb = batch
-                        cb = cb.to(dev)
-                    else:
-                        xb, yb = batch
-                        cb = None
-                    xb, yb = xb.to(dev), yb.to(dev)
-                    logits = _forward_batch(xb, cb)
-                    loss = criterion(logits, yb)
-                    vl += float(loss.item()) * len(xb)
-                    vn += len(xb)
-                    pred = (torch.sigmoid(logits) > 0.5).float()
-                    tp += float(((pred == 1) & (yb == 1)).sum())
-                    fp += float(((pred == 1) & (yb == 0)).sum())
-                    fn += float(((pred == 0) & (yb == 1)).sum())
-            val_loss = vl / max(vn, 1)
-            prec = tp / max(tp + fp, 1.0)
-            rec = tp / max(tp + fn, 1.0)
-            f1 = 2 * prec * rec / max(prec + rec, 1e-9)
+            val_loss, f1s, _, _ = _eval_loader(
+                model, dl_te, criterion, dev, context_dim, _forward_batch
+            )
 
             history["train_loss"].append(train_loss)
             history["val_loss"].append(val_loss)
-            history["val_f1_macro"].append(f1)
+            history["val_f1_micro"].append(f1s["f1_micro"])
+            history["val_f1_macro"].append(f1s["f1_macro"])
+            history["val_f1_weighted"].append(f1s["f1_weighted"])
+            history["val_f1_samples"].append(f1s["f1_samples"])
             monitor.update(
                 ep + 1,
                 epochs,
-                {"train_loss": train_loss, "val_loss": val_loss, "val_f1_macro": f1},
+                {
+                    "train_loss": train_loss,
+                    "val_loss": val_loss,
+                    "val_f1_weighted": f1s["f1_weighted"],
+                    "val_f1_macro": f1s["f1_macro"],
+                },
             )
 
-            if val_loss < best_val:
-                best_val = val_loss
+            score_key = early_metric.replace("val_", "f1_") if early_metric.startswith("val_f1") else "f1_weighted"
+            if score_key not in f1s:
+                score_key = "f1_weighted"
+            epoch_score = f1s[score_key]
+            if epoch_score > best_score:
+                best_score = epoch_score
+                best_val_loss = val_loss
+                best_epoch = ep + 1
                 best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
 
     if best_state is not None:
         model.load_state_dict(best_state)
+        log(f"best checkpoint: epoch={best_epoch}, {early_metric}={best_score:.4f}, val_loss={best_val_loss:.4f}")
 
     monitor.finalize()
+
+    _, test_f1s, y_te_true, y_te_pred = _eval_loader(
+        model, dl_te, criterion, dev, context_dim, _forward_batch
+    )
+    test_report = classification_report(
+        y_te_true,
+        y_te_pred,
+        target_names=class_names,
+        zero_division=0,
+    )
+    (run_dir / "irresnet_classification_report.txt").write_text(test_report, encoding="utf-8")
 
     version = str(train_cfg.get("model_version", f"v0.1.0.{hidden}"))
     bundle = {
@@ -230,9 +293,18 @@ def train_irresnet_run(
     summary = {
         "model_version": version,
         "n_classes": len(class_names),
-        "best_val_loss": best_val,
-        "final_val_f1": history["val_f1_macro"][-1] if history["val_f1_macro"] else None,
+        "label_schema": label_schema,
+        "best_epoch": best_epoch,
+        "early_stop_metric": early_metric,
+        "best_val_score": best_score,
+        "best_val_loss": best_val_loss,
+        "test_f1_micro": test_f1s["f1_micro"],
+        "test_f1_macro": test_f1s["f1_macro"],
+        "test_f1_weighted": test_f1s["f1_weighted"],
+        "test_f1_samples": test_f1s["f1_samples"],
+        "final_val_f1_weighted": history["val_f1_weighted"][-1] if history["val_f1_weighted"] else None,
         "context_dim": context_dim,
+        "use_measurement_context": bool(context_dim),
         "run_dir": str(run_dir),
     }
     (run_dir / "irresnet_metrics.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import urllib.error
@@ -22,6 +23,7 @@ from ir_pipeline.metrics_plot import plot_train_metrics
 from ir_pipeline.visualize import predict_file_visualize
 from ir_pipeline import torch_train as torch_train_mod
 from ir_pipeline import irresnet_train as irresnet_train_mod
+from ir_pipeline.dataset_audit import audit_dataset_duplicates
 from ir_pipeline.stage_runner import list_profiles, list_stages, load_stages_config, run_profile, run_stage
 
 
@@ -203,6 +205,34 @@ def build_dataset_cmd(
         train_frac=train_frac,
     )
     click.echo(f"Dataset written to {out}")
+
+
+@main.command("dataset-audit-duplicates")
+@click.option("--paths", type=click.Path(exists=True, path_type=Path), default=Path("configs/paths.local.yaml"))
+@click.option("--dataset-version", type=str, default=None)
+@click.option(
+    "--out-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="каталог отчёта (по умолчанию runs/<dataset>_audit)",
+)
+@click.option("--near-dup-threshold", type=float, default=0.99, show_default=True)
+def dataset_audit_duplicates_cmd(
+    paths: Path,
+    dataset_version: str | None,
+    out_dir: Path | None,
+    near_dup_threshold: float,
+):
+    """Отчёт о дублях в датасете (без удаления записей)."""
+    cfg = load_yaml(paths)
+    p = resolve_paths(cfg)
+    dv = dataset_version or str(p["dataset_version"])
+    ds_dir = p["processed_root"] / dv
+    if not ds_dir.exists():
+        raise click.ClickException(f"Нет датасета {ds_dir}")
+    od = out_dir or Path("runs") / f"{dv}_audit"
+    report = audit_dataset_duplicates(ds_dir, p["bands_config"], od, near_dup_threshold=near_dup_threshold)
+    click.echo(f"Audit written to {od}\n{json.dumps(report, indent=2, ensure_ascii=False)}")
 
 
 @main.command("build-mini-dataset")
@@ -412,10 +442,15 @@ def torch_train_cmd(
 @click.option("--device", type=str, default=None)
 @click.option(
     "--label-schema",
-    type=click.Choice(["spectrum", "structure"]),
+    type=click.Choice(["spectrum", "structure", "structure_smarts"]),
     default="structure",
     show_default=True,
-    help="structure = multi-label по SMARTS (labels_structure.parquet); spectrum = все пики в регионе",
+    help="structure_smarts = SMARTS-only; structure = SMARTS+peak; spectrum = пики в регионе",
+)
+@click.option(
+    "--use-measurement-context/--no-measurement-context",
+    default=None,
+    help="контекст ATR/gas/solution; по умолчанию из yaml use_measurement_context",
 )
 def irresnet_train_cmd(
     paths: Path,
@@ -424,6 +459,7 @@ def irresnet_train_cmd(
     run_dir: Path | None,
     device: str | None,
     label_schema: str,
+    use_measurement_context: bool | None,
 ):
     """Обучение IrResnet4 (multi-label, 3 канала)."""
     if not irresnet_train_mod.is_torch_available():
@@ -444,6 +480,7 @@ def irresnet_train_cmd(
         train_cfg=train_cfg,
         device=device,
         label_schema=label_schema,
+        use_measurement_context=use_measurement_context,
     )
     click.echo(f"IrResnet training done → {rd}\n{summary}")
 

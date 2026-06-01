@@ -63,11 +63,24 @@ ir-pipeline gradcam-examples --run-dir runs/<irresnet_run> --paths configs/paths
 | `torch_loss` | `bce_with_logits` | multi-label loss |
 | `ir_hidden_size` | 34 | ширина FC в IrResnet4 |
 | `pos_weight_scale` | 1.0 | масштаб pos_weight в BCE |
-| `live_training_plot` | `true` в colab yaml | каждую эпоху: лог последних 5 значений, clear_output, график |
+| `live_training_plot` | `true` в colab yaml | каждую эпоху: лог + график (**только in-process**, см. ниже) |
 | `train_log_tail` | 5 | сколько последних эпох печатать в лог |
+| `early_stop_metric` | `val_f1_weighted` | чекпоинт по sklearn weighted F1 (в `train_irresnet_experiments.yaml`) |
+
+**Live-график в Colab:** вызов `train_irresnet_run()` из ячейки Python (см. `notebooks/colab_03_*`, `colab_05_*`). Команда `!ir-pipeline irresnet-train` в subprocess **не** обновляет график в ноутбуке.
+
+**Схемы меток (`--label-schema`):**
+
+| Значение | Файл | Позитив |
+|----------|------|---------|
+| `spectrum` | `labels_spectrum.parquet` | пик в регионе |
+| `structure` | `labels_structure.parquet` | SMARTS + пик |
+| `structure_smarts` | `labels_structure_smarts.parquet` | SMARTS (без требования пика) |
 
 1D CNN (`torch-train`): `configs/train_torch_colab.yaml`, loss — `smooth_l1` или `mse`.
 
 ```bash
 ir-pipeline irresnet-train --config configs/train_irresnet_colab.yaml --run-dir runs/my_run ...
+ir-pipeline irresnet-train --label-schema structure_smarts --no-measurement-context ...
+ir-pipeline dataset-audit-duplicates --dataset-version dataset_v002
 ```

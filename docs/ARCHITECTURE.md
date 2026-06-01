@@ -61,7 +61,7 @@ flowchart TB
 
 ## Метки multi-label
 
-Для каждого `band_id` из [`bands_reference.yaml`](../configs/bands_reference.yaml): метка `1`, если в `labels_spectrum.parquet` (или `labels_structure.parquet`) есть `observed_peak_cm1`.
+Для каждого `band_id` из [`bands_reference.yaml`](../configs/bands_reference.yaml): метка `1` при `spectrum`/`structure` — если есть `observed_peak_cm1`; при `structure_smarts` — если строка есть в `labels_structure_smarts.parquet` (SMARTS-only, пик не обязателен).
 
 ## Превью датасета
 

@@ -103,6 +103,7 @@ class CnnTrainingMonitor:
         out = self.run_dir / self.plot_filename
         fig.savefig(out, dpi=140, bbox_inches="tight")
         display(fig)
+        plt.show(block=False)
         plt.close(fig)
 
     def _save_static_plot(self, fig=None) -> Path:

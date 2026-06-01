@@ -22,6 +22,7 @@ class BandObservation:
     observed_peak_cm1: float | None
     intensity_class: str
     label_confidence: float
+    optional_peak_cm1: float | None = None
 
 
 def find_dominant_peak_in_region(
@@ -143,6 +144,41 @@ def label_spectrum_structure_conditioned(
                 observed_peak_cm1=pk,
                 intensity_class=icls,
                 label_confidence=conf,
+            )
+        )
+    return out
+
+
+def label_spectrum_structure_smarts_only(
+    wn: np.ndarray,
+    absorb_norm: np.ndarray,
+    coverage_mask: np.ndarray,
+    mol: Chem.Mol | None,
+    bands: list[BandDef],
+) -> list[BandObservation]:
+    """Метки только по SMARTS: позитив без требования пика в регионе (observed_peak_cm1=None)."""
+    out: list[BandObservation] = []
+    for b in bands:
+        if not structure_matches_band(mol, b):
+            continue
+        pk, conf = find_dominant_peak_in_region(
+            wn,
+            absorb_norm,
+            coverage_mask,
+            b.range_min_cm1,
+            b.range_max_cm1,
+        )
+        icls = intensity_bucket_from_peak(absorb_norm, wn, pk) if pk is not None else "u"
+        out.append(
+            BandObservation(
+                band_id=b.band_id,
+                region_min_cm1=b.range_min_cm1,
+                region_max_cm1=b.range_max_cm1,
+                structure_match=True,
+                observed_peak_cm1=None,
+                intensity_class=icls,
+                label_confidence=conf if pk is not None else 0.0,
+                optional_peak_cm1=pk,
             )
         )
     return out

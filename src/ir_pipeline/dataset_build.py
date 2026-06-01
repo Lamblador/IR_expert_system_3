@@ -20,7 +20,12 @@ from ir_pipeline.jcamp_loader import (
     qc_jcamp_dict,
     read_jcamp_dict,
 )
-from ir_pipeline.labeling import BandObservation, label_spectrum_spectrum_only, label_spectrum_structure_conditioned
+from ir_pipeline.labeling import (
+    BandObservation,
+    label_spectrum_spectrum_only,
+    label_spectrum_structure_conditioned,
+    label_spectrum_structure_smarts_only,
+)
 from ir_pipeline.preprocess import preprocess_to_grid, to_absorbance_like, wavenumbers_from_jcamp
 from ir_pipeline.structure_resolver import (
     load_structure_cache,
@@ -153,6 +158,7 @@ def build_dataset(
     meta_rows: list[dict[str, Any]] = []
     rows_spec: list[dict[str, Any]] = []
     rows_str: list[dict[str, Any]] = []
+    rows_smarts: list[dict[str, Any]] = []
 
     spectra_list: list[np.ndarray] = []
     absorb_corr_list: list[np.ndarray] = []
@@ -252,6 +258,12 @@ def build_dataset(
         for o in obs_str:
             rows_str.append(_obs_row(sid, o, label_schema="structure_conditioned"))
 
+        obs_smarts = label_spectrum_structure_smarts_only(
+            grid.wavenumbers, grid.absorbance_normalized, grid.coverage_mask, mol, bands
+        )
+        for o in obs_smarts:
+            rows_smarts.append(_obs_row(sid, o, label_schema="structure_smarts_only"))
+
     _event("saving structure cache")
     save_structure_cache(cache_path, cache)
 
@@ -298,6 +310,11 @@ def build_dataset(
 
     pd.DataFrame(rows_spec).to_parquet(out_dir / "labels_spectrum.parquet", index=False)
     pd.DataFrame(rows_str).to_parquet(out_dir / "labels_structure.parquet", index=False)
+    pd.DataFrame(rows_smarts).to_parquet(out_dir / "labels_structure_smarts.parquet", index=False)
+
+    n_spec_pos = int(pd.DataFrame(rows_spec)["observed_peak_cm1"].notna().sum()) if rows_spec else 0
+    n_str_pos = int(pd.DataFrame(rows_str)["observed_peak_cm1"].notna().sum()) if rows_str else 0
+    n_smarts_pos = len(rows_smarts)
 
     unresolved = meta_df[(meta_df["qc_ok"] == True) & (meta_df["smiles"].isna())]  # noqa: E712
     unresolved.to_parquet(out_dir / "unresolved_structures.parquet", index=False)
@@ -321,6 +338,16 @@ def build_dataset(
             "X": "normalized absorbance-like on grid",
             "X_absorbance_corrected": "after ALS baseline + smoothing",
             "X_absorbance_like_interp": "interpolated absorbance/transmittance-derived on grid",
+        },
+        "label_files": {
+            "labels_spectrum.parquet": "peaks in band regions (no SMARTS filter)",
+            "labels_structure.parquet": "SMARTS match + observed peak in region",
+            "labels_structure_smarts.parquet": "SMARTS match only (peak optional in optional_peak_cm1)",
+        },
+        "label_positive_rows": {
+            "spectrum": n_spec_pos,
+            "structure": n_str_pos,
+            "structure_smarts": n_smarts_pos,
         },
     }
     _event("writing manifest.json")
@@ -397,8 +424,11 @@ def _obs_row(spectrum_id: str, o: BandObservation, label_schema: str) -> dict[st
         "region_min_cm1": o.region_min_cm1,
         "region_max_cm1": o.region_max_cm1,
         "structure_match": o.structure_match,
-        "structure_expected": o.structure_match if label_schema == "structure_conditioned" else None,
+        "structure_expected": o.structure_match
+        if label_schema in {"structure_conditioned", "structure_smarts_only"}
+        else None,
         "observed_peak_cm1": o.observed_peak_cm1,
+        "optional_peak_cm1": o.optional_peak_cm1,
         "intensity_class": o.intensity_class,
         "label_confidence": o.label_confidence,
         "label_schema": label_schema,
