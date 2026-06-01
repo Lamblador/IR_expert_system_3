@@ -47,3 +47,26 @@ ir-pipeline gradcam-examples --run-dir runs/<irresnet_run> --paths configs/paths
 ```
 
 Отключить контекст: в yaml `use_measurement_context: false` или переобучить без `X_context`.
+
+## Гиперпараметры и мониторинг (Colab)
+
+Файлы: `configs/train_irresnet.yaml` (локально), `configs/train_irresnet_colab.yaml` (live-графики).
+
+| Ключ | По умолчанию | Описание |
+|------|--------------|----------|
+| `torch_epochs` | 30 | число эпох |
+| `torch_batch_size` | 32 | размер батча |
+| `torch_lr` | 0.001 | learning rate |
+| `torch_optimizer` | `adamw` | `adamw`, `adam`, `sgd` |
+| `torch_weight_decay` | 1e-4 | L2 для AdamW/Adam/SGD |
+| `torch_loss` | `bce_with_logits` | multi-label loss |
+| `ir_hidden_size` | 34 | ширина FC в IrResnet4 |
+| `pos_weight_scale` | 1.0 | масштаб pos_weight в BCE |
+| `live_training_plot` | `true` в colab yaml | каждую эпоху: лог последних 5 значений, clear_output, график |
+| `train_log_tail` | 5 | сколько последних эпох печатать в лог |
+
+1D CNN (`torch-train`): `configs/train_torch_colab.yaml`, loss — `smooth_l1` или `mse`.
+
+```bash
+ir-pipeline irresnet-train --config configs/train_irresnet_colab.yaml --run-dir runs/my_run ...
+```

@@ -1,3 +1,4 @@
+# Colab: IrResnet4 с live-графиками и расширенными гиперпараметрами (см. colab_03).
 random_seed: 42
 train_frac: 0.85
 torch_epochs: 30
@@ -5,9 +6,11 @@ torch_batch_size: 32
 torch_lr: 0.001
 torch_optimizer: adamw
 torch_weight_decay: 0.0001
+torch_momentum: 0.9
 torch_loss: bce_with_logits
 ir_hidden_size: 34
 pos_weight_scale: 1.0
 model_version: v0.1.0.34
-# one-hot: ATR / transmission / gas / solution + фаза образца → конкатенация перед FC
 use_measurement_context: true
+live_training_plot: true
+train_log_tail: 5

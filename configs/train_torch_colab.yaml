@@ -1,0 +1,11 @@
+# Colab: 1D CNN (torch-train) с live-графиками.
+random_seed: 42
+train_frac: 0.85
+torch_epochs: 30
+torch_batch_size: 32
+torch_lr: 0.001
+torch_optimizer: adamw
+torch_weight_decay: 0.0001
+torch_loss: smooth_l1
+live_training_plot: true
+train_log_tail: 5

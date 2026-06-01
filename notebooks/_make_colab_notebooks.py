@@ -34,6 +34,34 @@ def code(source: str) -> dict:
     }
 
 
+def mount_google_drive_cell() -> dict:
+    return code(
+        "from google.colab import drive\n"
+        "drive.mount('/content/drive')\n"
+        "from pathlib import Path\n"
+        "IR_DATA = Path('/content/drive/MyDrive/ir_data')\n"
+        "print('IR_DATA exists:', IR_DATA.exists(), IR_DATA)\n"
+    )
+
+
+def md_cnn_hyperparameters() -> dict:
+    return md(
+        "## Гиперпараметры обучения (CNN / IrResnet)\n\n"
+        "| Параметр | По умолчанию (Colab) | Файл / как поменять |\n"
+        "|----------|----------------------|---------------------|\n"
+        "| **Эпохи** | `torch_epochs: 30` | `configs/train_irresnet_colab.yaml` |\n"
+        "| **Learning rate** | `torch_lr: 0.001` | тот же yaml |\n"
+        "| **Batch size** | `torch_batch_size: 32` | тот же yaml |\n"
+        "| **Оптимизатор** | `torch_optimizer: adamw` | `adamw` \\| `adam` \\| `sgd` |\n"
+        "| **Loss (IrResnet)** | `torch_loss: bce_with_logits` | multi-label BCE с logits |\n"
+        "| **Loss (torch-train 1D CNN)** | `smooth_l1` | в `configs/train_torch_colab.yaml`: `smooth_l1` или `mse` |\n"
+        "| **Размер скрытого слоя** | `ir_hidden_size: 34` | только IrResnet |\n"
+        "| **Live-графики** | `live_training_plot: true` | в Colab: clear + график каждую эпоху; лог — последние 5 значений |\n\n"
+        "В ячейке обучения ниже используется `--config configs/train_irresnet_colab.yaml`. "
+        "Скопируйте yaml, измените числа, сохраните и укажите свой путь в `--config`.\n"
+    )
+
+
 def bootstrap_cell(extra: str = "") -> dict:
     src = (
         "import subprocess\n"
@@ -77,8 +105,13 @@ def extract_manual_datasets_cell(
         "    Path('/content'),\n"
         "    Path('/content/IR_expert_system_3'),\n"
         "    Path('/content/drive/MyDrive'),\n"
+        "    Path('/content/drive/MyDrive/ir_data'),\n"
         "    Path('.'),\n"
         "]\n"
+        "try:\n"
+        "    SEARCH_ROOTS.insert(0, IR_DATA)\n"
+        "except NameError:\n"
+        "    pass\n"
         "DEST = Path('data/processed')\n"
         "DEST.mkdir(parents=True, exist_ok=True)\n\n"
         "def _dataset_ready(name: str) -> bool:\n"
@@ -221,6 +254,7 @@ NOTEBOOKS = {
             "Клонирует репозиторий и ставит зависимости."
         ),
         bootstrap_cell(),
+        mount_google_drive_cell(),
         md_manual_dataset_upload(),
         extract_manual_datasets_cell(),
         ensure_data_cell(),
@@ -228,6 +262,7 @@ NOTEBOOKS = {
     "colab_01_dataset.ipynb": [
         md("# Этап 1: датасет и превью (автономный)\n\nSetup + HF fetch + графики spectrum/structure labels."),
         bootstrap_cell(),
+        mount_google_drive_cell(),
         md_manual_dataset_upload(),
         extract_manual_datasets_cell(),
         ensure_data_cell(),
@@ -244,6 +279,7 @@ NOTEBOOKS = {
     "colab_02_baseline_rf.ipynb": [
         md("# Этап 2: baseline RandomForest (автономный)\n\nSetup + dataset + RF + графики MAE."),
         bootstrap_cell(),
+        mount_google_drive_cell(),
         md_manual_dataset_upload(),
         extract_manual_datasets_cell(),
         ensure_data_cell(),
@@ -265,14 +301,16 @@ NOTEBOOKS = {
     "colab_03_train_irresnet4.ipynb": [
         md("# Этап 3: IrResnet4 multi-label (автономный)\n\n3-канальный вход 400–4000 см⁻¹ + контекст ATR/gas/solution."),
         bootstrap_cell(),
+        mount_google_drive_cell(),
         md_manual_dataset_upload(),
         extract_manual_datasets_cell(),
         ensure_data_cell(),
+        md_cnn_hyperparameters(),
         code(
             "from pathlib import Path\nfrom IPython.display import Image, display\n\n"
             "RUN_DIR = Path('runs/colab_pipeline_irresnet/irresnet_run')\n"
             "!ir-pipeline irresnet-train --paths configs/paths.huggingface.yaml "
-            "--dataset-version dataset_mini --config configs/train_irresnet.yaml --run-dir {RUN_DIR}\n\n"
+            "--dataset-version dataset_mini --config configs/train_irresnet_colab.yaml --run-dir {RUN_DIR}\n\n"
             "hits = sorted(Path('runs').rglob('irresnet_training_curve.png'))\n"
             "if hits:\n"
             "    display(Image(filename=str(hits[-1]), width=900))\n"
@@ -286,6 +324,7 @@ NOTEBOOKS = {
             "Наложение карт важности на спектр. Можно задать индексы спектров и классов."
         ),
         bootstrap_cell(),
+        mount_google_drive_cell(),
         md_manual_dataset_upload(),
         extract_manual_datasets_cell(),
         ensure_data_cell(),

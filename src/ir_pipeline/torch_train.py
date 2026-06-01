@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from ir_pipeline.train_monitor import CnnTrainingMonitor, build_torch_optimizer
+
 try:
     import torch
     import torch.nn as nn
@@ -80,6 +82,11 @@ if torch is not None:
 
     def _masked_smooth_l1(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         loss_elem = F.smooth_l1_loss(pred, target, reduction="none")
+        denom = mask.sum().clamp_min(1.0)
+        return (loss_elem * mask).sum() / denom
+
+    def _masked_mse(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        loss_elem = F.mse_loss(pred, target, reduction="none")
         denom = mask.sum().clamp_min(1.0)
         return (loss_elem * mask).sum() / denom
 
@@ -180,9 +187,16 @@ def train_torch_run(
 
     seq_len = X.shape[1]
     model = ConvPeakMultitask(seq_len, len(band_order)).to(dev)
-    opt = torch.optim.AdamW(model.parameters(), lr=float(train_cfg.get("torch_lr", 1e-3)), weight_decay=1e-4)
+    opt = build_torch_optimizer(model, train_cfg)
     epochs = int(train_cfg.get("torch_epochs", 30))
-    _event(f"training epochs={epochs}, train_rows={len(train_rows)}, test_rows={len(test_rows)}, bands={len(band_order)}")
+    loss_name = str(train_cfg.get("torch_loss", "smooth_l1")).lower().strip()
+    loss_fn = _masked_mse if loss_name == "mse" else _masked_smooth_l1
+    monitor = CnnTrainingMonitor.from_train_cfg(run_dir, train_cfg, title="ConvPeak 1D CNN")
+    monitor.plot_filename = "torch_training_curve.png"
+    _event(
+        f"training epochs={epochs}, train_rows={len(train_rows)}, test_rows={len(test_rows)}, "
+        f"bands={len(band_order)}, optimizer={train_cfg.get('torch_optimizer', 'adamw')}, loss={loss_name}"
+    )
 
     history: dict[str, list[float]] = {"train_loss": [], "val_loss": [], "val_mae_cm": []}
 
@@ -195,7 +209,7 @@ def train_torch_run(
         for xb, yb, mb in dl_te:
             xb, yb, mb = xb.to(dev), yb.to(dev), mb.to(dev)
             pred = model(xb)
-            loss = _masked_smooth_l1(pred, yb, mb)
+            loss = loss_fn(pred, yb, mb)
             total_loss += float(loss.item()) * len(xb)
             diff_cm = torch.abs(pred - yb) * SCALE_PEAK_CM * mb
             total_mae_num += float(diff_cm.sum().item())
@@ -204,11 +218,6 @@ def train_torch_run(
         val_loss = total_loss / max(n, 1)
         val_mae = total_mae_num / max(total_mae_den, 1.0)
         return val_loss, val_mae
-
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
 
     best_val = float("inf")
     best_state = None
@@ -222,7 +231,7 @@ def train_torch_run(
             xb, yb, mb = xb.to(dev), yb.to(dev), mb.to(dev)
             opt.zero_grad(set_to_none=True)
             pred = model(xb)
-            loss = _masked_smooth_l1(pred, yb, mb)
+            loss = loss_fn(pred, yb, mb)
             loss.backward()
             opt.step()
             tl_acc += float(loss.item()) * len(xb)
@@ -233,6 +242,11 @@ def train_torch_run(
         history["val_loss"].append(val_loss)
         history["val_mae_cm"].append(val_mae_cm)
         epoch_bar.set_postfix(train_loss=f"{train_loss:.4f}", val_loss=f"{val_loss:.4f}", val_mae_cm=f"{val_mae_cm:.1f}")
+        monitor.update(
+            _ep + 1,
+            epochs,
+            {"train_loss": train_loss, "val_loss": val_loss, "val_mae_cm": val_mae_cm},
+        )
 
         if val_loss < best_val:
             best_val = val_loss
@@ -240,6 +254,8 @@ def train_torch_run(
 
     if best_state is not None:
         model.load_state_dict(best_state)
+
+    monitor.finalize()
 
     bundle: dict[str, Any] = {
         "kind": "torch_conv_peak_multitask",
@@ -256,20 +272,6 @@ def train_torch_run(
 
     _event("writing torch_history.json")
     (run_dir / "torch_history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
-
-    _event("writing torch_training_curve.png")
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-    axes[0].plot(history["train_loss"], label="train")
-    axes[0].plot(history["val_loss"], label="val")
-    axes[0].set_title("SmoothL1 (scaled ν)")
-    axes[0].set_xlabel("epoch")
-    axes[0].legend()
-    axes[1].plot(history["val_mae_cm"], color="tab:orange")
-    axes[1].set_title("Val MAE (cm⁻¹, masked)")
-    axes[1].set_xlabel("epoch")
-    fig.tight_layout()
-    fig.savefig(run_dir / "torch_training_curve.png", dpi=140)
-    plt.close(fig)
 
     summary = {
         "best_val_loss_scaled": float(best_val),

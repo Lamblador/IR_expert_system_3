@@ -24,6 +24,12 @@ def merge_train_defaults(train_cfg: dict[str, Any]) -> dict[str, Any]:
         "torch_epochs": 30,
         "torch_batch_size": 32,
         "torch_lr": 1e-3,
+        "torch_optimizer": "adamw",
+        "torch_weight_decay": 1e-4,
+        "torch_momentum": 0.9,
+        "torch_loss": "bce_with_logits",
+        "live_training_plot": False,
+        "train_log_tail": 5,
         # auto | sklearn | cuml — см. train_sklearn (GPU RF через RAPIDS cuML)
         "rf_backend": "auto",
     }

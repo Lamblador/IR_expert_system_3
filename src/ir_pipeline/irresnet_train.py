@@ -13,6 +13,11 @@ from ir_pipeline.dataset_preview import build_multilabel_matrix
 from ir_pipeline.logging_utils import heartbeat, log
 from ir_pipeline.models.ir_resnet4 import IrResnet4
 from ir_pipeline.resnet_input import ensure_model_inputs_npz, load_model_inputs
+from ir_pipeline.train_monitor import (
+    CnnTrainingMonitor,
+    build_irresnet_criterion,
+    build_torch_optimizer,
+)
 
 try:
     import torch
@@ -104,22 +109,26 @@ def train_irresnet_run(
     hidden = int(train_cfg.get("ir_hidden_size", 34))
     epochs = int(train_cfg.get("torch_epochs", 30))
     bs = int(train_cfg.get("torch_batch_size", 32))
-    lr = float(train_cfg.get("torch_lr", 1e-3))
-    pos_weight_scale = float(train_cfg.get("pos_weight_scale", 1.0))
-
     dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
     log(
         f"irresnet-train: device={dev}, classes={len(class_names)}, "
         f"train={len(tr_idx)}, test={len(te_idx)}, context_dim={context_dim}"
     )
 
-    pos = Y_tr.sum(axis=0)
-    neg = len(Y_tr) - pos
-    pw = torch.tensor(np.clip(neg / np.maximum(pos, 1.0), 1.0, 50.0) * pos_weight_scale, dtype=torch.float32).to(dev)
-
     model = IrResnet4(hidden_size=hidden, class_nums=len(class_names), context_dim=context_dim).to(dev)
-    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pw)
+    opt = build_torch_optimizer(model, train_cfg)
+    criterion = build_irresnet_criterion(Y_tr, dev, train_cfg)
+    monitor = CnnTrainingMonitor.from_train_cfg(
+        run_dir,
+        train_cfg,
+        title="IrResnet4",
+    )
+    monitor.plot_filename = "irresnet_training_curve.png"
+    log(
+        f"optimizer={train_cfg.get('torch_optimizer', 'adamw')}, "
+        f"loss={train_cfg.get('torch_loss', 'bce_with_logits')}, "
+        f"live_plot={monitor.live_plot}"
+    )
 
     ds_tr = IrDataset(X_tr, Y_tr, C_tr)
     ds_te = IrDataset(X_te, Y_te, C_te)
@@ -129,11 +138,6 @@ def train_irresnet_run(
     history: dict[str, list[float]] = {"train_loss": [], "val_loss": [], "val_f1_macro": []}
     best_val = float("inf")
     best_state = None
-
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
 
     def _forward_batch(xb: torch.Tensor, cb: torch.Tensor | None) -> torch.Tensor:
         if context_dim:
@@ -190,7 +194,11 @@ def train_irresnet_run(
             history["train_loss"].append(train_loss)
             history["val_loss"].append(val_loss)
             history["val_f1_macro"].append(f1)
-            log(f"epoch {ep + 1}/{epochs}: train_loss={train_loss:.4f} val_loss={val_loss:.4f} val_f1={f1:.3f}")
+            monitor.update(
+                ep + 1,
+                epochs,
+                {"train_loss": train_loss, "val_loss": val_loss, "val_f1_macro": f1},
+            )
 
             if val_loss < best_val:
                 best_val = val_loss
@@ -198,6 +206,8 @@ def train_irresnet_run(
 
     if best_state is not None:
         model.load_state_dict(best_state)
+
+    monitor.finalize()
 
     version = str(train_cfg.get("model_version", f"v0.1.0.{hidden}"))
     bundle = {
@@ -216,17 +226,6 @@ def train_irresnet_run(
     torch.save({"model_state": model.state_dict(), "meta": bundle}, run_dir / "irresnet_bundle.pt")
     (run_dir / "irresnet_history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
     (run_dir / "classes.txt").write_text("\n".join(class_names) + "\n", encoding="utf-8")
-
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-    axes[0].plot(history["train_loss"], label="train")
-    axes[0].plot(history["val_loss"], label="val")
-    axes[0].legend()
-    axes[0].set_title("BCE loss")
-    axes[1].plot(history["val_f1_macro"], color="tab:green")
-    axes[1].set_title("Val F1 (macro approx)")
-    fig.tight_layout()
-    fig.savefig(run_dir / "irresnet_training_curve.png", dpi=140)
-    plt.close(fig)
 
     summary = {
         "model_version": version,
