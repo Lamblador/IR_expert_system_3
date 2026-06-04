@@ -89,3 +89,15 @@ def context_dict_from_row(meta_row: pd.Series) -> dict[str, float]:
 
 def vector_from_dict(ctx: dict[str, float], columns: list[str]) -> np.ndarray:
     return np.array([float(ctx.get(c, 0.0)) for c in columns], dtype=np.float32)
+
+
+def unknown_context_vector(columns: list[str] | None = None) -> np.ndarray:
+    """Вектор «контекст неизвестен» для аугментации при обучении."""
+    cols = columns or context_column_names()
+    v = np.zeros(len(cols), dtype=np.float32)
+    idx = {c: i for i, c in enumerate(cols)}
+    if "mm_unknown" in idx:
+        v[idx["mm_unknown"]] = 1.0
+    if "st_unknown" in idx:
+        v[idx["st_unknown"]] = 1.0
+    return v

@@ -14,7 +14,13 @@ def _event(message: str) -> None:
     tqdm.write(f"[ir-pipeline] {message}")
 
 
-def evaluate_run(dataset_dir: Path, run_dir: Path, mode: str) -> dict:
+def evaluate_run(
+    dataset_dir: Path,
+    run_dir: Path,
+    mode: str,
+    *,
+    eval_subset: str = "test",
+) -> dict:
     bundle_path = run_dir / "models.joblib"
     if not bundle_path.exists():
         raise FileNotFoundError(bundle_path)
@@ -42,12 +48,16 @@ def evaluate_run(dataset_dir: Path, run_dir: Path, mode: str) -> dict:
     models = bundle["models"]
     rf_backend = infer_rf_backend(bundle)
 
-    split_path = dataset_dir / "split.json"
-    test_ids: set[str] | None = None
-    if split_path.exists():
-        sp = json.loads(split_path.read_text(encoding="utf-8"))
-        cand = set(map(str, sp.get("test_ids", [])))
-        test_ids = cand if len(cand) > 0 else None
+    from ir_pipeline.dataset_split import load_split_ids
+
+    sp = load_split_ids(dataset_dir)
+    subset = str(eval_subset).lower().strip()
+    if subset == "val" and sp["val"]:
+        test_ids: set[str] | None = sp["val"]
+    elif sp["test"]:
+        test_ids = sp["test"]
+    else:
+        test_ids = None
 
     rows = []
     for band, model in tqdm(models.items(), total=len(models), desc="Evaluate bands", unit="band"):

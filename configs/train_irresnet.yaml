@@ -1,5 +1,5 @@
 random_seed: 42
-train_frac: 0.85
+label_schema: structure_smarts
 torch_epochs: 30
 torch_batch_size: 32
 torch_lr: 0.001
@@ -9,5 +9,8 @@ torch_loss: bce_with_logits
 ir_hidden_size: 34
 pos_weight_scale: 1.0
 model_version: v0.1.0.34
-# one-hot: ATR / transmission / gas / solution + фаза образца → конкатенация перед FC
 use_measurement_context: true
+context_dropout_prob: 0.25
+use_weighted_sampler: false
+early_stop_metric: val_f1_weighted
+early_stop_patience: 0

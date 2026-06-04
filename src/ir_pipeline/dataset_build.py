@@ -286,23 +286,35 @@ def build_dataset(
         wavenumbers=last_wn.astype(np.float32),
     )
 
-    rng = np.random.default_rng(int(split_seed))
-    uids = np.array(spectrum_ids, dtype=object)
-    perm = rng.permutation(len(uids))
-    u_shuf = uids[perm]
-    split_idx = int(max(1, round(float(train_frac) * len(u_shuf))))
-    train_ids = u_shuf[:split_idx].tolist()
-    test_ids = u_shuf[split_idx:].tolist()
-    if not test_ids:
-        test_ids = train_ids
-    split_payload = {
-        "seed": int(split_seed),
-        "train_frac": float(train_frac),
-        "train_ids": train_ids,
-        "test_ids": test_ids,
-    }
     _event("writing split.json")
-    (out_dir / "split.json").write_text(json.dumps(split_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    if str(dataset_version) == "dataset_v003":
+        from ir_pipeline.dataset_split import build_split_for_dataset
+
+        build_split_for_dataset(
+            out_dir,
+            bands_yaml,
+            label_schema="structure_smarts",
+            seed=int(split_seed),
+            group_by_inchikey=True,
+        )
+    else:
+        rng = np.random.default_rng(int(split_seed))
+        uids = np.array(spectrum_ids, dtype=object)
+        perm = rng.permutation(len(uids))
+        u_shuf = uids[perm]
+        split_idx = int(max(1, round(float(train_frac) * len(u_shuf))))
+        train_ids = u_shuf[:split_idx].tolist()
+        test_ids = u_shuf[split_idx:].tolist()
+        if not test_ids:
+            test_ids = train_ids
+        split_payload = {
+            "version": 1,
+            "seed": int(split_seed),
+            "train_frac": float(train_frac),
+            "train_ids": train_ids,
+            "test_ids": test_ids,
+        }
+        (out_dir / "split.json").write_text(json.dumps(split_payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
     meta_df = pd.DataFrame(meta_rows)
     _event("writing parquet tables")

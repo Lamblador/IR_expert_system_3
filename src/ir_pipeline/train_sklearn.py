@@ -222,13 +222,12 @@ def train_models(
 
     band_ids = sorted(labels["band_id"].unique().tolist())
 
-    split_path = dataset_dir / "split.json"
-    if split_path.exists():
-        sp = json.loads(split_path.read_text(encoding="utf-8"))
-        train_ids = set(map(str, sp.get("train_ids", [])))
-        test_ids = set(map(str, sp.get("test_ids", [])))
-        if not test_ids:
-            test_ids = train_ids
+    from ir_pipeline.dataset_split import load_split_ids
+
+    sp = load_split_ids(dataset_dir)
+    if sp["train"]:
+        train_ids = sp["train"]
+        test_ids = sp["test"] if sp["test"] else sp["train"]
     else:
         rng = np.random.default_rng(random_seed)
         uids = np.array(sorted(valid_index.unique().tolist()))

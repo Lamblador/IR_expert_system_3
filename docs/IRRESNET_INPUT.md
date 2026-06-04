@@ -51,23 +51,23 @@ ir-pipeline gradcam-examples --run-dir runs/<irresnet_run> --paths configs/paths
 
 ## Гиперпараметры и мониторинг (Colab)
 
-Файлы: `configs/train_irresnet.yaml` (локально), `configs/train_irresnet_colab.yaml` (live-графики).
+Файлы: `configs/train_irresnet_original.yaml` (full/v003), `configs/train_irresnet_mini.yaml` (smoke), `configs/train_irresnet_colab.yaml` (live-графики).
 
-| Ключ | По умолчанию | Описание |
-|------|--------------|----------|
-| `torch_epochs` | 30 | число эпох |
+| Ключ | По умолчанию (original) | Описание |
+|------|------------------------|----------|
+| `label_schema` | `structure_smarts` | SMARTS-only (как оригинал) |
+| `torch_epochs` | 200 | upper bound; early stopping |
 | `torch_batch_size` | 32 | размер батча |
-| `torch_lr` | 0.001 | learning rate |
-| `torch_optimizer` | `adamw` | `adamw`, `adam`, `sgd` |
-| `torch_weight_decay` | 1e-4 | L2 для AdamW/Adam/SGD |
-| `torch_loss` | `bce_with_logits` | multi-label loss |
-| `ir_hidden_size` | 34 | ширина FC в IrResnet4 |
-| `pos_weight_scale` | 1.0 | масштаб pos_weight в BCE |
-| `live_training_plot` | `true` в colab yaml | каждую эпоху: лог + график (**только in-process**, см. ниже) |
-| `train_log_tail` | 5 | сколько последних эпох печатать в лог |
-| `early_stop_metric` | `val_f1_weighted` | чекпоинт по sklearn weighted F1 (в `train_irresnet_experiments.yaml`) |
+| `torch_lr` | 1e-5 | learning rate |
+| `torch_scheduler` | `steplr` | StepLR(75, γ=0.2) |
+| `ir_hidden_size` | 72 | full; mini: 34 |
+| `use_weighted_sampler` | true | WeightedRandomSampler |
+| `context_dropout_prob` | 0.25 | unknown context при train |
+| `early_stop_metric` | `val_lrap` | чекпоинт по val |
+| `augment_train` | true | online-аугментация спектра |
+**Датасет:** `--dataset-profile auto|mini|full` — см. [`data/README.md`](../data/README.md).
 
-**Live-график в Colab:** вызов `train_irresnet_run()` из ячейки Python (см. `notebooks/colab_03_*`, `colab_05_*`). Команда `!ir-pipeline irresnet-train` в subprocess **не** обновляет график в ноутбуке.
+**Live-график в Colab:** `IrResnetTrainer` / `train_irresnet_run()` (см. `colab_03`, `colab_05`, `colab_06`). CLI в subprocess **не** обновляет график в ноутбуке.
 
 **Схемы меток (`--label-schema`):**
 
@@ -80,7 +80,8 @@ ir-pipeline gradcam-examples --run-dir runs/<irresnet_run> --paths configs/paths
 1D CNN (`torch-train`): `configs/train_torch_colab.yaml`, loss — `smooth_l1` или `mse`.
 
 ```bash
-ir-pipeline irresnet-train --config configs/train_irresnet_colab.yaml --run-dir runs/my_run ...
-ir-pipeline irresnet-train --label-schema structure_smarts --no-measurement-context ...
-ir-pipeline dataset-audit-duplicates --dataset-version dataset_v002
+ir-pipeline irresnet-train --dataset-profile full --config configs/train_irresnet_original.yaml
+ir-pipeline dataset-split --dataset-version dataset_v003
+ir-pipeline augment-model-inputs --dataset-version dataset_v003
+ir-pipeline dataset-audit-duplicates --dataset-version dataset_v003
 ```

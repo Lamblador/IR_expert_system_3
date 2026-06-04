@@ -167,6 +167,25 @@ def build_torch_optimizer(model: Any, train_cfg: dict[str, Any]) -> Any:
     return torch.optim.AdamW(params, lr=lr, weight_decay=wd)
 
 
+def build_torch_scheduler(optimizer: Any, train_cfg: dict[str, Any]) -> Any | None:
+    """StepLR как в оригинале (step 75, gamma 0.2)."""
+    import torch
+
+    sched = str(train_cfg.get("torch_scheduler") or "").lower().strip()
+    if sched in {"", "none", "null"}:
+        return None
+    if sched == "steplr":
+        step = int(train_cfg.get("torch_scheduler_step_size", 75))
+        gamma = float(train_cfg.get("torch_scheduler_gamma", 0.2))
+        return torch.optim.lr_scheduler.StepLR(optimizer, step_size=step, gamma=gamma)
+    log(f"неизвестный torch_scheduler={sched}, scheduler отключён")
+    return None
+
+
+# Alias for Colab notebooks
+IrResnetTrainingPlotter = CnnTrainingMonitor
+
+
 def build_irresnet_criterion(
     Y_tr: Any,
     device: str,

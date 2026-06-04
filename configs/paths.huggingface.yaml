@@ -1,5 +1,5 @@
-# Пример после fetch-data с Lamblador/IRSpectra2 (без Google Drive).
+# Colab / HF: auto → dataset_v003 если есть, иначе dataset_mini
 raw_jcamp_dir: downloaded_jcamp
 processed_root: data/processed
-dataset_version: dataset_mini
+dataset_profile: auto
 bands_config: configs/bands_reference.yaml

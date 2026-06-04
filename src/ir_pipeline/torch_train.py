@@ -152,11 +152,13 @@ def train_torch_run(
     if len(band_order) == 0:
         raise RuntimeError("Нет ни одной полосы с observed_peak_cm1 — пересоберите датасет.")
 
-    split_path = dataset_dir / "split.json"
-    if split_path.exists():
-        sp = json.loads(split_path.read_text(encoding="utf-8"))
-        train_ids = set(map(str, sp["train_ids"]))
-        test_ids = set(map(str, sp["test_ids"]))
+    from ir_pipeline.dataset_split import load_split_ids
+
+    sp = load_split_ids(dataset_dir)
+    if sp["train"]:
+        train_ids = sp["train"]
+        val_ids = sp["val"] if sp["val"] else sp["test"]
+        test_ids = sp["test"] if sp["test"] else sp["train"]
     else:
         rng = np.random.default_rng(int(train_cfg.get("random_seed", 42)))
         uids = np.array(sorted(set(spec_ids)))
@@ -166,24 +168,29 @@ def train_torch_run(
         test_ids = set(uids[split_i:].tolist())
         if not test_ids:
             test_ids = train_ids
+        val_ids = test_ids
 
     train_rows = [i for i, sid in enumerate(spec_ids) if sid in train_ids]
+    val_rows = [i for i, sid in enumerate(spec_ids) if sid in val_ids]
     test_rows = [i for i, sid in enumerate(spec_ids) if sid in test_ids]
 
     if len(train_rows) < 4:
         raise RuntimeError("Слишком мало спектров в train split для torch.")
 
     X_tr, Y_tr, M_tr = X[train_rows], Y[train_rows], M[train_rows]
+    X_va, Y_va, M_va = X[val_rows], Y[val_rows], M[val_rows]
     X_te, Y_te, M_te = X[test_rows], Y[test_rows], M[test_rows]
 
     dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
     _event(f"torch device: {dev}")
 
     ds_tr = PeakMultiDataset(X_tr, Y_tr, M_tr)
+    ds_va = PeakMultiDataset(X_va, Y_va, M_va)
     ds_te = PeakMultiDataset(X_te, Y_te, M_te)
     bs = int(train_cfg.get("torch_batch_size", 32))
     dl_tr = DataLoader(ds_tr, batch_size=bs, shuffle=True, drop_last=len(ds_tr) > bs)
-    dl_te = DataLoader(ds_te, batch_size=min(bs, len(ds_te)), shuffle=False)
+    dl_va = DataLoader(ds_va, batch_size=min(bs, max(len(ds_va), 1)), shuffle=False)
+    dl_te = DataLoader(ds_te, batch_size=min(bs, max(len(ds_te), 1)), shuffle=False)
 
     seq_len = X.shape[1]
     model = ConvPeakMultitask(seq_len, len(band_order)).to(dev)
@@ -194,7 +201,7 @@ def train_torch_run(
     monitor = CnnTrainingMonitor.from_train_cfg(run_dir, train_cfg, title="ConvPeak 1D CNN")
     monitor.plot_filename = "torch_training_curve.png"
     _event(
-        f"training epochs={epochs}, train_rows={len(train_rows)}, test_rows={len(test_rows)}, "
+        f"training epochs={epochs}, train={len(train_rows)}, val={len(val_rows)}, test={len(test_rows)}, "
         f"bands={len(band_order)}, optimizer={train_cfg.get('torch_optimizer', 'adamw')}, loss={loss_name}"
     )
 
@@ -206,7 +213,7 @@ def train_torch_run(
         total_loss = 0.0
         total_mae_num = 0.0
         total_mae_den = 0.0
-        for xb, yb, mb in dl_te:
+        for xb, yb, mb in dl_va:
             xb, yb, mb = xb.to(dev), yb.to(dev), mb.to(dev)
             pred = model(xb)
             loss = loss_fn(pred, yb, mb)
@@ -214,7 +221,7 @@ def train_torch_run(
             diff_cm = torch.abs(pred - yb) * SCALE_PEAK_CM * mb
             total_mae_num += float(diff_cm.sum().item())
             total_mae_den += float(mb.sum().item())
-        n = len(ds_te)
+        n = max(len(ds_va), 1)
         val_loss = total_loss / max(n, 1)
         val_mae = total_mae_num / max(total_mae_den, 1.0)
         return val_loss, val_mae

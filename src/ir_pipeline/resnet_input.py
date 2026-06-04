@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -201,6 +202,8 @@ def ensure_model_inputs_npz(
 
 def load_model_inputs(
     dataset_dir: Path,
+    *,
+    include_augmented: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, list[str], np.ndarray | None, list[str]]:
     path = ensure_model_inputs_npz(dataset_dir)
     z = np.load(path, allow_pickle=True)
@@ -212,4 +215,76 @@ def load_model_inputs(
     if "X_context" in z:
         X_ctx = np.asarray(z["X_context"], dtype=np.float32)
         ctx_cols = [str(c) for c in z["context_columns"].tolist()]
+
+    aug_path = dataset_dir / "model_inputs_aug.npz"
+    if include_augmented and aug_path.is_file():
+        za = np.load(aug_path, allow_pickle=True)
+        Xa = np.asarray(za["X_input"], dtype=np.float32)
+        idsa = [str(s) for s in za["spectrum_id"].tolist()]
+        X = np.vstack([X, Xa]).astype(np.float32)
+        ids = ids + idsa
+        if X_ctx is not None and "X_context" in za:
+            Xca = np.asarray(za["X_context"], dtype=np.float32)
+            X_ctx = np.vstack([X_ctx, Xca]).astype(np.float32)
+        elif X_ctx is not None:
+            base_sid = {s: i for i, s in enumerate(ids[: len(ids) - len(idsa)])}
+            extra = np.zeros((len(idsa), X_ctx.shape[1]), dtype=np.float32)
+            for j, sid in enumerate(idsa):
+                orig = sid.split("_aug")[0]
+                if orig in base_sid:
+                    extra[j] = X_ctx[base_sid[orig]]
+            X_ctx = np.vstack([X_ctx, extra]).astype(np.float32)
+
     return X, wn, ids, X_ctx, ctx_cols
+
+
+def write_augmented_model_inputs(
+    dataset_dir: Path,
+    *,
+    n_per_spectrum: int = 1,
+    seed: int = 42,
+    train_cfg: dict | None = None,
+) -> Path:
+    """Offline-аугментация train_ids → model_inputs_aug.npz."""
+    from ir_pipeline.dataset_split import load_split_ids
+    from ir_pipeline.spectrum_augment import augment_model_inputs_offline
+
+    ensure_model_inputs_npz(dataset_dir)
+    X, wn, ids, X_ctx, ctx_cols = load_model_inputs(dataset_dir, include_augmented=False)
+    splits = load_split_ids(dataset_dir)
+    train_ids = splits["train"] if splits["train"] else set(ids)
+    Xa, idsa = augment_model_inputs_offline(
+        X, ids, train_ids, n_per_spectrum=n_per_spectrum, seed=seed, train_cfg=train_cfg
+    )
+    if len(idsa) <= len(ids):
+        raise RuntimeError("Не создано augmented образцов")
+    aug_only_x = Xa[len(ids) :]
+    aug_only_ids = idsa[len(ids) :]
+    payload: dict[str, object] = {
+        "X_input": aug_only_x,
+        "spectrum_id": np.array(aug_only_ids, dtype=object),
+        "wavenumbers": wn,
+        "version": MODEL_INPUTS_VERSION,
+    }
+    if X_ctx is not None:
+        base_map = {s: i for i, s in enumerate(ids)}
+        ctx_aug = np.zeros((len(aug_only_ids), X_ctx.shape[1]), dtype=np.float32)
+        for j, sid in enumerate(aug_only_ids):
+            orig = sid.split("_aug")[0]
+            if orig in base_map:
+                ctx_aug[j] = X_ctx[base_map[orig]]
+        payload["X_context"] = ctx_aug
+        payload["context_columns"] = np.array(ctx_cols, dtype=object)
+    out = dataset_dir / "model_inputs_aug.npz"
+    np.savez_compressed(out, **payload)
+    manifest = {
+        "n_augmented": len(aug_only_ids),
+        "n_per_spectrum": n_per_spectrum,
+        "seed": seed,
+        "source": "model_inputs.npz",
+    }
+    (dataset_dir / "augment_manifest.json").write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return out

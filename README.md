@@ -84,7 +84,9 @@ os.environ["HF_TOKEN"] = userdata.get("HF_TOKEN")
 - `spectra.npz`: `X` (нормализованный спектр), `X_absorbance_corrected`, `X_absorbance_like_interp`, `coverage`, `wavenumbers`
 - `meta.parquet`, `labels_spectrum.parquet`, `labels_structure.parquet`, `labels_structure_smarts.parquet`, `unresolved_structures.parquet`
 - **Схемы меток:** `spectrum` — пик в регионе; `structure` — SMARTS + пик; `structure_smarts` — только SMARTS (пик в `optional_peak_cm1` для справки)
-- `structure_cache.parquet`, `split.json` (фиксированное разбиение для обучения/валидации), `manifest.json`
+- `structure_cache.parquet`, `split.json` (v1: 85/15 train/test; **v2 в `dataset_v003`:** 70/10/20 train/val/test), `manifest.json`
+
+Подробнее о версиях датасетов и `dataset_profile` (mini/full): [`data/README.md`](data/README.md).
 
 ## Этапы пайплайна (оркестратор)
 
@@ -144,7 +146,8 @@ ir-pipeline torch-train --paths configs/paths.local.yaml --dataset-version datas
 ir-pipeline predict ... --run-dir runs/<torch_run> --torch --output-dir reports/out_torch
 
 # IrResnet4 multi-label + Grad-CAM (ручной выбор индексов опционален)
-ir-pipeline irresnet-train --paths configs/paths.local.yaml --dataset-version dataset_mini --config configs/train_irresnet.yaml
+ir-pipeline irresnet-train --paths configs/paths.local.yaml --dataset-profile mini --config configs/train_irresnet_mini.yaml
+ir-pipeline irresnet-train --paths configs/paths.local.yaml --dataset-profile full --config configs/train_irresnet_original.yaml
 ir-pipeline gradcam-examples --paths configs/paths.local.yaml --run-dir runs/<irresnet_run> --output-dir reports/gradcam
 ir-pipeline gradcam-examples --run-dir runs/<irresnet_run> --spectrum-indices 0,7,15 --class-indices 3,12
 

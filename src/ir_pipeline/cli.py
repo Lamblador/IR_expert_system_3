@@ -15,7 +15,18 @@ from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError, HfHubHTTPError, RepositoryNotFoundError
 from tqdm import tqdm
 
-from ir_pipeline.config_loader import load_yaml, merge_train_defaults, resolve_paths
+from ir_pipeline.config_loader import (
+    load_yaml,
+    merge_train_defaults,
+    resolve_dataset_dir,
+    resolve_paths,
+)
+from ir_pipeline.dataset_split import (
+    audit_split,
+    build_split_for_dataset,
+    copy_dataset_version,
+)
+from ir_pipeline.resnet_input import write_augmented_model_inputs
 from ir_pipeline.dataset_build import build_dataset, resolve_missing_structures_for_dataset
 from ir_pipeline.evaluate import evaluate_run
 from ir_pipeline.train_sklearn import train_models
@@ -235,6 +246,99 @@ def dataset_audit_duplicates_cmd(
     click.echo(f"Audit written to {od}\n{json.dumps(report, indent=2, ensure_ascii=False)}")
 
 
+@main.command("dataset-copy-version")
+@click.option("--paths", type=click.Path(exists=True, path_type=Path), default=Path("configs/paths.local.yaml"))
+@click.option("--from-version", "from_version", required=True, help="например dataset_v002")
+@click.option("--to-version", "to_version", required=True, help="например dataset_v003")
+@click.option("--overwrite", is_flag=True, help="перезаписать целевой каталог")
+def dataset_copy_version_cmd(paths: Path, from_version: str, to_version: str, overwrite: bool):
+    """Копия processed-датасета без пересборки JCAMP."""
+    cfg = load_yaml(paths)
+    p = resolve_paths(cfg)
+    dst = copy_dataset_version(p["processed_root"], from_version, to_version, overwrite=overwrite)
+    click.echo(f"Copied → {dst}")
+
+
+@main.command("dataset-split")
+@click.option("--paths", type=click.Path(exists=True, path_type=Path), default=Path("configs/paths.local.yaml"))
+@click.option("--dataset-version", type=str, default=None)
+@click.option(
+    "--label-schema",
+    type=click.Choice(["spectrum", "structure", "structure_smarts"]),
+    default="structure_smarts",
+    show_default=True,
+)
+@click.option("--train-frac", type=float, default=0.70, show_default=True)
+@click.option("--val-frac", type=float, default=0.10, show_default=True)
+@click.option("--test-frac", type=float, default=0.20, show_default=True)
+@click.option("--seed", type=int, default=42, show_default=True)
+@click.option("--group-by-inchikey/--no-group-by-inchikey", default=True, show_default=True)
+def dataset_split_cmd(
+    paths: Path,
+    dataset_version: str | None,
+    label_schema: str,
+    train_frac: float,
+    val_frac: float,
+    test_frac: float,
+    seed: int,
+    group_by_inchikey: bool,
+):
+    """Пересоздать split.json v2 (70/10/20 по умолчанию)."""
+    cfg = load_yaml(paths)
+    p = resolve_paths(cfg)
+    dv = dataset_version or str(p["dataset_version"])
+    ds_dir = p["processed_root"] / dv
+    if not ds_dir.exists():
+        raise click.ClickException(f"Нет датасета {ds_dir}")
+    payload = build_split_for_dataset(
+        ds_dir,
+        p["bands_config"],
+        label_schema=label_schema,
+        fractions={"train": train_frac, "val": val_frac, "test": test_frac},
+        seed=seed,
+        group_by_inchikey=group_by_inchikey,
+    )
+    click.echo(json.dumps({"n_train": len(payload["train_ids"]), "n_val": len(payload["val_ids"]), "n_test": len(payload["test_ids"])}, indent=2))
+
+
+@main.command("dataset-split-audit")
+@click.option("--paths", type=click.Path(exists=True, path_type=Path), default=Path("configs/paths.local.yaml"))
+@click.option("--dataset-version", type=str, default=None)
+@click.option("--label-schema", type=click.Choice(["spectrum", "structure", "structure_smarts"]), default="structure_smarts")
+def dataset_split_audit_cmd(paths: Path, dataset_version: str | None, label_schema: str):
+    cfg = load_yaml(paths)
+    p = resolve_paths(cfg)
+    dv = dataset_version or str(p["dataset_version"])
+    ds_dir = p["processed_root"] / dv
+    report = audit_split(ds_dir, p["bands_config"], label_schema=label_schema)
+    click.echo(json.dumps(report, indent=2, ensure_ascii=False))
+
+
+@main.command("augment-model-inputs")
+@click.option("--paths", type=click.Path(exists=True, path_type=Path), default=Path("configs/paths.local.yaml"))
+@click.option("--dataset-version", type=str, default=None)
+@click.option("--n-per-spectrum", type=int, default=1, show_default=True)
+@click.option("--seed", type=int, default=42, show_default=True)
+@click.option("--config", type=click.Path(exists=True, path_type=Path), default=None)
+def augment_model_inputs_cmd(
+    paths: Path,
+    dataset_version: str | None,
+    n_per_spectrum: int,
+    seed: int,
+    config: Path | None,
+):
+    """Offline-аугментация train спектров → model_inputs_aug.npz."""
+    cfg = load_yaml(paths)
+    p = resolve_paths(cfg)
+    dv = dataset_version or str(p["dataset_version"])
+    ds_dir = p["processed_root"] / dv
+    train_cfg = merge_train_defaults(load_yaml(config)) if config else {}
+    out = write_augmented_model_inputs(
+        ds_dir, n_per_spectrum=n_per_spectrum, seed=seed, train_cfg=train_cfg
+    )
+    click.echo(f"Written {out}")
+
+
 @main.command("build-mini-dataset")
 @click.option("--paths", type=click.Path(exists=True, path_type=Path), default=Path("configs/paths.local.yaml"))
 @click.option(
@@ -357,12 +461,18 @@ def plot_train_metrics_cmd(run_dir: Path, bands: Path, output_dir: Path | None):
     default="spectrum_structure",
     show_default=True,
 )
-def evaluate_cmd(paths: Path, dataset_version: str | None, run_dir: Path, mode: str):
+@click.option(
+    "--eval-subset",
+    type=click.Choice(["test", "val"]),
+    default="test",
+    show_default=True,
+)
+def evaluate_cmd(paths: Path, dataset_version: str | None, run_dir: Path, mode: str, eval_subset: str):
     paths_cfg = load_yaml(paths)
     p = resolve_paths(paths_cfg)
     dv = dataset_version or str(p["dataset_version"])
     ds_dir = p["processed_root"] / dv
-    summary = evaluate_run(ds_dir, run_dir, mode=mode)
+    summary = evaluate_run(ds_dir, run_dir, mode=mode, eval_subset=eval_subset)
     click.echo(summary)
 
 
@@ -437,15 +547,24 @@ def torch_train_cmd(
 @main.command("irresnet-train")
 @click.option("--paths", type=click.Path(exists=True, path_type=Path), default=Path("configs/paths.local.yaml"))
 @click.option("--dataset-version", type=str, default=None)
-@click.option("--config", type=click.Path(exists=True, path_type=Path), default=Path("configs/train_irresnet.yaml"))
+@click.option(
+    "--dataset-profile",
+    type=click.Choice(["auto", "mini", "full"]),
+    default=None,
+    help="mini=dataset_mini, full=dataset_v003; перекрывает paths yaml",
+)
+@click.option(
+    "--config",
+    type=click.Path(exists=True, path_type=Path),
+    default=Path("configs/train_irresnet_original.yaml"),
+)
 @click.option("--run-dir", type=click.Path(path_type=Path), default=None)
 @click.option("--device", type=str, default=None)
 @click.option(
     "--label-schema",
     type=click.Choice(["spectrum", "structure", "structure_smarts"]),
-    default="structure",
-    show_default=True,
-    help="structure_smarts = SMARTS-only; structure = SMARTS+peak; spectrum = пики в регионе",
+    default=None,
+    help="по умолчанию structure_smarts из config",
 )
 @click.option(
     "--use-measurement-context/--no-measurement-context",
@@ -455,22 +574,28 @@ def torch_train_cmd(
 def irresnet_train_cmd(
     paths: Path,
     dataset_version: str | None,
+    dataset_profile: str | None,
     config: Path,
     run_dir: Path | None,
     device: str | None,
-    label_schema: str,
+    label_schema: str | None,
     use_measurement_context: bool | None,
 ):
     """Обучение IrResnet4 (multi-label, 3 канала)."""
     if not irresnet_train_mod.is_torch_available():
         raise click.ClickException("Установите torch: pip install -e '.[torch]'")
     paths_cfg = load_yaml(paths)
+    if dataset_profile:
+        paths_cfg["dataset_profile"] = dataset_profile
     p = resolve_paths(paths_cfg)
-    dv = dataset_version or str(p["dataset_version"])
-    ds_dir = p["processed_root"] / dv
+    if dataset_version:
+        ds_dir = p["processed_root"] / dataset_version
+    else:
+        ds_dir = resolve_dataset_dir(paths_cfg, dataset_profile)
     if not ds_dir.exists():
         raise click.ClickException(f"Нет датасета {ds_dir}")
     train_cfg = merge_train_defaults(load_yaml(config))
+    schema = label_schema or str(train_cfg.get("label_schema", "structure_smarts"))
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     rd = run_dir or Path("runs") / f"irresnet_{ts}"
     summary = irresnet_train_mod.train_irresnet_run(
@@ -479,7 +604,7 @@ def irresnet_train_cmd(
         bands_yaml=p["bands_config"],
         train_cfg=train_cfg,
         device=device,
-        label_schema=label_schema,
+        label_schema=schema,
         use_measurement_context=use_measurement_context,
     )
     click.echo(f"IrResnet training done → {rd}\n{summary}")
