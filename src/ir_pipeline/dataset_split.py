@@ -39,6 +39,16 @@ def _validate_fractions(fractions: dict[str, float]) -> dict[str, float]:
     return f
 
 
+def fractions_from_train_frac(train_frac: float) -> dict[str, float]:
+    """train_frac → train/val/test; доля val:test как в DEFAULT_FRACTIONS."""
+    train = float(train_frac)
+    remainder = max(0.0, 1.0 - train)
+    val_test_sum = DEFAULT_FRACTIONS["val"] + DEFAULT_FRACTIONS["test"]
+    val = remainder * (DEFAULT_FRACTIONS["val"] / val_test_sum)
+    test = remainder * (DEFAULT_FRACTIONS["test"] / val_test_sum)
+    return _validate_fractions({"train": train, "val": val, "test": test})
+
+
 def _multilabel_stratified_two_way(
     Y: np.ndarray,
     ids: list[str],

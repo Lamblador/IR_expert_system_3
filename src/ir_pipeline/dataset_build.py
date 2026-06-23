@@ -288,12 +288,13 @@ def build_dataset(
 
     _event("writing split.json")
     if str(dataset_version) == "dataset_v003":
-        from ir_pipeline.dataset_split import build_split_for_dataset
+        from ir_pipeline.dataset_split import build_split_for_dataset, fractions_from_train_frac
 
         build_split_for_dataset(
             out_dir,
             bands_yaml,
             label_schema="structure_smarts",
+            fractions=fractions_from_train_frac(train_frac),
             seed=int(split_seed),
             group_by_inchikey=True,
         )
