@@ -13,7 +13,7 @@ import torch
 import torch.nn.functional as F
 
 from ir_pipeline.logging_utils import log
-from ir_pipeline.models.ir_resnet4 import IrResnet4
+from ir_pipeline.models.model_factory import build_spectrum_model
 from ir_pipeline.resnet_input import RESNET_WAVENUMBERS, load_model_inputs
 
 
@@ -42,7 +42,7 @@ class _GradientHook:
 
 
 def compute_cam(
-    model: IrResnet4,
+    model: torch.nn.Module,
     input_tensor: torch.Tensor,
     class_idx: int,
     context: torch.Tensor | None = None,
@@ -97,7 +97,19 @@ def run_gradcam_examples(
     class_names: list[str] = meta["class_names"]
     hidden = int(meta["hidden_size"])
     context_dim = int(meta.get("context_dim", 0))
-    model = IrResnet4(hidden_size=hidden, class_nums=len(class_names), context_dim=context_dim)
+    model_family = str(meta.get("model_family", "irresnet4"))
+    train_cfg = {
+        "kan_grid_size": meta.get("kan_grid_size"),
+        "kan_spline_order": meta.get("kan_spline_order", 3),
+        "kan_full_hidden_size": meta.get("kan_full_hidden_size", hidden),
+    }
+    model = build_spectrum_model(
+        model_family,
+        hidden_size=hidden,
+        class_nums=len(class_names),
+        context_dim=context_dim,
+        train_cfg=train_cfg,
+    )
     model.load_state_dict(ck["model_state"])
     model.eval()
 

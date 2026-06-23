@@ -1,8 +1,9 @@
-"""Обучение IrResnet4 (multi-label) на model_inputs.npz."""
+"""Обучение IrResnet4 / KAN (multi-label) на model_inputs.npz."""
 
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -14,7 +15,7 @@ from ir_pipeline.dataset_preview import build_multilabel_matrix
 from ir_pipeline.dataset_split import load_split_ids
 from ir_pipeline.logging_utils import heartbeat, log
 from ir_pipeline.measurement_context import unknown_context_vector
-from ir_pipeline.models.ir_resnet4 import IrResnet4
+from ir_pipeline.models.model_factory import build_spectrum_model, count_parameters
 from ir_pipeline.resnet_input import ensure_model_inputs_npz, load_model_inputs
 from ir_pipeline.spectrum_augment import SpectrumAugmentor, augment_config_from_train_cfg
 from ir_pipeline.train_monitor import (
@@ -255,15 +256,38 @@ def train_irresnet_run(
     C_te = X_ctx[te_idx] if context_dim else None
 
     hidden = int(train_cfg.get("ir_hidden_size", 34))
+    model_family = str(train_cfg.get("model_family", "irresnet4"))
     epochs = int(train_cfg.get("torch_epochs", 30))
     bs = int(train_cfg.get("torch_batch_size", 32))
     dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
     log(
-        f"irresnet-train: device={dev}, schema={label_schema}, classes={len(class_names)}, "
-        f"train={len(tr_idx)}, val={len(va_idx)}, test={len(te_idx)}, context_dim={context_dim}"
+        f"irresnet-train: family={model_family}, device={dev}, schema={label_schema}, "
+        f"classes={len(class_names)}, train={len(tr_idx)}, val={len(va_idx)}, test={len(te_idx)}, "
+        f"context_dim={context_dim}, hidden={hidden}"
     )
 
-    model = IrResnet4(hidden_size=hidden, class_nums=len(class_names), context_dim=context_dim).to(dev)
+    model = build_spectrum_model(
+        model_family,
+        hidden_size=hidden,
+        class_nums=len(class_names),
+        context_dim=context_dim,
+        train_cfg=train_cfg,
+    ).to(dev)
+    n_params, n_trainable = count_parameters(model)
+    if model_family == "kan_full":
+        ref = build_spectrum_model(
+            "irresnet4",
+            hidden_size=hidden,
+            class_nums=len(class_names),
+            context_dim=context_dim,
+            train_cfg=train_cfg,
+        )
+        ref_n, _ = count_parameters(ref)
+        if ref_n > 0 and n_params > ref_n * 1.15:
+            log(
+                f"предупреждение: kan_full params={n_params} > +15% от irresnet4 ({ref_n}); "
+                "рассмотрите kan_full_hidden_size или kan_grid_size"
+            )
     opt = build_torch_optimizer(model, train_cfg)
     scheduler = build_torch_scheduler(opt, train_cfg)
     class_pw = compute_class_pos_weights(
@@ -273,7 +297,7 @@ def train_irresnet_run(
     )
     criterion = build_irresnet_criterion(Y_tr, dev, train_cfg)
 
-    monitor = CnnTrainingMonitor.from_train_cfg(run_dir, train_cfg, title="IrResnet4")
+    monitor = CnnTrainingMonitor.from_train_cfg(run_dir, train_cfg, title=f"train:{model_family}")
     monitor.plot_filename = "irresnet_training_curve.png"
 
     rng_aug = np.random.default_rng(int(train_cfg.get("random_seed", 42)))
@@ -339,6 +363,7 @@ def train_irresnet_run(
         return f1s.get(fk, f1s.get("f1_weighted", 0.0))
 
     stopped_early = False
+    train_t0 = time.perf_counter()
     with heartbeat(60.0, "irresnet training in progress..."):
         for ep in tqdm(range(epochs), desc="IrResnet epochs", unit="epoch"):
             model.train()
@@ -399,6 +424,8 @@ def train_irresnet_run(
                 stopped_early = True
                 break
 
+    train_wall_time_sec = time.perf_counter() - train_t0
+
     if best_state is not None:
         model.load_state_dict(best_state)
         log(f"best checkpoint: epoch={best_epoch}, {early_metric}={best_score:.4f}, val_loss={best_val_loss:.4f}")
@@ -434,6 +461,7 @@ def train_irresnet_run(
     version = str(train_cfg.get("model_version", f"v0.1.0.{hidden}"))
     bundle = {
         "kind": "irresnet4_multilabel",
+        "model_family": model_family,
         "model_version": version,
         "hidden_size": hidden,
         "class_names": class_names,
@@ -447,14 +475,23 @@ def train_irresnet_run(
         "prediction_threshold": thresh,
         "early_stop_metric": early_metric,
         "stopped_early": stopped_early,
+        "n_params": n_params,
+        "n_trainable_params": n_trainable,
+        "kan_grid_size": train_cfg.get("kan_grid_size"),
+        "kan_full_hidden_size": train_cfg.get("kan_full_hidden_size", hidden),
+        "train_wall_time_sec": train_wall_time_sec,
     }
     torch.save({"model_state": model.state_dict(), "meta": bundle}, run_dir / "irresnet_bundle.pt")
     (run_dir / "irresnet_history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
     (run_dir / "classes.txt").write_text("\n".join(class_names) + "\n", encoding="utf-8")
 
     summary = {
+        "model_family": model_family,
         "model_version": version,
         "n_classes": len(class_names),
+        "n_params": n_params,
+        "n_trainable_params": n_trainable,
+        "train_wall_time_sec": train_wall_time_sec,
         "label_schema": label_schema,
         "best_epoch": best_epoch,
         "early_stop_metric": early_metric,

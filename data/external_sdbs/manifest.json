@@ -1,0 +1,9 @@
+{
+  "n_spectra": 295,
+  "n_candidates": 295,
+  "skipped_in_v003": 0,
+  "skipped_qc_or_parse": 0,
+  "dataset_v003_dir": "data\\processed\\dataset_v003",
+  "raw_jcamp_dir": "downloaded_jcamp",
+  "sdbs_only": true
+}

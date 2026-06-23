@@ -1,4 +1,4 @@
-"""1D ResNet для multi-label классификации ИК-спектров (3 канала, 400–4000 см⁻¹)."""
+"""IrKanHybrid (M1): CNN-энкодер IrResnet4 + KAN-голова."""
 
 from __future__ import annotations
 
@@ -6,26 +6,34 @@ import torch
 import torch.nn as nn
 
 from ir_pipeline.models.ir_encoder import ResNetEncoder
+from ir_pipeline.models.kan_layers import KANHead
 
 
-class IrResnet4(nn.Module):
-    """
-    Вход: (B, 3, L), L=1801 для сетки 400–4000 см⁻¹, шаг 2.
-    Опционально context (B, C): one-hot техники измерения + фазы образца, конкатенируется перед FC.
-    """
-
-    def __init__(self, hidden_size: int = 34, class_nums: int = 17, context_dim: int = 0):
+class IrKanHybrid(nn.Module):
+    def __init__(
+        self,
+        hidden_size: int = 34,
+        class_nums: int = 17,
+        context_dim: int = 0,
+        *,
+        kan_grid_size: int = 5,
+        kan_spline_order: int = 3,
+        head_hidden: int = 200,
+    ):
         super().__init__()
         self.hidden_size = hidden_size
         self.context_dim = int(context_dim)
         self.class_nums = int(class_nums)
+        self.kan_grid_size = kan_grid_size
         self.encoder = ResNetEncoder(hidden_size)
         self.do1 = nn.Dropout1d(0.5)
-        flat_dim = self.encoder.flat_dim
-        self.fc = nn.Linear(flat_dim + self.context_dim, 200)
-        self.do2 = nn.Dropout1d(0.2)
-        self.relu1 = nn.ReLU()
-        self.fc1 = nn.Linear(200, class_nums)
+        self.head = KANHead(
+            self.encoder.flat_dim + self.context_dim,
+            head_hidden,
+            class_nums,
+            grid_size=kan_grid_size,
+            spline_order=kan_spline_order,
+        )
 
     def encode_spectrum(self, batch: torch.Tensor) -> torch.Tensor:
         return self.encoder.encode_spectrum(batch)
@@ -37,10 +45,7 @@ class IrResnet4(nn.Module):
             if context is None:
                 raise ValueError(f"Ожидается context размерности {self.context_dim}")
             batch = torch.cat([batch, context], dim=1)
-        batch = self.fc(batch)
-        batch = self.do2(batch)
-        batch = self.relu1(batch)
-        return self.fc1(batch)
+        return self.head(batch)
 
     def cam_target_layer(self) -> nn.Module:
         return self.encoder.cam_target_layer()
