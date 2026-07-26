@@ -14,6 +14,7 @@ from tqdm import tqdm
 from ir_pipeline.bands import load_bands
 from ir_pipeline.jcamp_loader import (
     cas_from_filename,
+    extract_jcamp_structure_ids,
     extract_measurement_mode,
     extract_sample_state,
     flatten_if_link,
@@ -123,16 +124,26 @@ def build_dataset(
     resolve_missing_structures: bool = False,
     split_seed: int = 42,
     train_frac: float = 0.85,
+    *,
+    include_labels: bool = True,
 ) -> Path:
-    """Собирает версионированный датасет: spectra.npz, meta.parquet, labels_*.parquet, manifest.json."""
+    """Собирает версионированный датасет: spectra.npz, meta.parquet, manifest.json (+ labels при include_labels)."""
     out_dir = processed_root / dataset_version
     out_dir.mkdir(parents=True, exist_ok=True)
-    _event(f"build-dataset start: version={dataset_version}, max_files={max_files or 'all'}")
+    _event(
+        f"build-dataset start: version={dataset_version}, max_files={max_files or 'all'}, "
+        f"include_labels={include_labels}"
+    )
 
-    _event(f"loading bands: {bands_yaml}")
-    bands = load_bands(bands_yaml)
-    band_ids = [b.band_id for b in bands]
-    _event(f"loaded bands: {len(band_ids)}")
+    if include_labels:
+        _event(f"loading bands: {bands_yaml}")
+        bands = load_bands(bands_yaml)
+        band_ids = [b.band_id for b in bands]
+        _event(f"loaded bands: {len(band_ids)}")
+    else:
+        bands = []
+        band_ids = []
+        _event("labels disabled: skipping bands / SMARTS labeling")
 
     cache_path = structure_cache_path(processed_root, dataset_version)
     _event(f"loading structure cache: {cache_path}")
@@ -193,6 +204,7 @@ def build_dataset(
         yunits = d.get("yunits")
         x_cm = wavenumbers_from_jcamp(np.asarray(d["x"], dtype=float), xunits)
         y_abs_like = to_absorbance_like(np.asarray(d["y"], dtype=float), yunits)
+        jcamp_inchi, jcamp_inchikey = extract_jcamp_structure_ids(d)
 
         meta_common = {
             "spectrum_id": sid,
@@ -200,6 +212,8 @@ def build_dataset(
             "cas": cas_from_filename(fp) or str(d.get("cas registry no", "")),
             "title": str(d.get("title", "")),
             "molform": str(d.get("molform", "")),
+            "jcamp_inchi": jcamp_inchi,
+            "jcamp_inchikey": jcamp_inchikey,
             "xunits_raw": str(xunits or ""),
             "yunits_raw": str(yunits or ""),
             "npoints": int(d.get("npoints", 0) or 0),
@@ -224,9 +238,11 @@ def build_dataset(
             cache,
             pubchem_sleep_s,
             allow_network=resolve_missing_structures,
+            inchi=jcamp_inchi,
+            inchikey=jcamp_inchikey,
         )
 
-        mol = mol_from_resolution(res)
+        mol = mol_from_resolution(res) if include_labels else None
         if res.get("smiles") is None:
             struct_failed += 1
 
@@ -236,7 +252,8 @@ def build_dataset(
                 "qc_ok": True,
                 "qc_reason": None,
                 "smiles": res.get("smiles"),
-                "inchikey": res.get("inchikey"),
+                "inchi": res.get("inchi") or jcamp_inchi,
+                "inchikey": res.get("inchikey") or jcamp_inchikey,
                 "structure_source": res.get("source"),
                 "structure_error": res.get("error"),
             }
@@ -248,21 +265,24 @@ def build_dataset(
         coverage_list.append(grid.coverage_mask.astype(np.uint8))
         spectrum_ids.append(sid)
 
-        obs_spec = label_spectrum_spectrum_only(grid.wavenumbers, grid.absorbance_normalized, grid.coverage_mask, bands)
-        for o in obs_spec:
-            rows_spec.append(_obs_row(sid, o, label_schema="spectrum_only"))
+        if include_labels:
+            obs_spec = label_spectrum_spectrum_only(
+                grid.wavenumbers, grid.absorbance_normalized, grid.coverage_mask, bands
+            )
+            for o in obs_spec:
+                rows_spec.append(_obs_row(sid, o, label_schema="spectrum_only"))
 
-        obs_str = label_spectrum_structure_conditioned(
-            grid.wavenumbers, grid.absorbance_normalized, grid.coverage_mask, mol, bands
-        )
-        for o in obs_str:
-            rows_str.append(_obs_row(sid, o, label_schema="structure_conditioned"))
+            obs_str = label_spectrum_structure_conditioned(
+                grid.wavenumbers, grid.absorbance_normalized, grid.coverage_mask, mol, bands
+            )
+            for o in obs_str:
+                rows_str.append(_obs_row(sid, o, label_schema="structure_conditioned"))
 
-        obs_smarts = label_spectrum_structure_smarts_only(
-            grid.wavenumbers, grid.absorbance_normalized, grid.coverage_mask, mol, bands
-        )
-        for o in obs_smarts:
-            rows_smarts.append(_obs_row(sid, o, label_schema="structure_smarts_only"))
+            obs_smarts = label_spectrum_structure_smarts_only(
+                grid.wavenumbers, grid.absorbance_normalized, grid.coverage_mask, mol, bands
+            )
+            for o in obs_smarts:
+                rows_smarts.append(_obs_row(sid, o, label_schema="structure_smarts_only"))
 
     _event("saving structure cache")
     save_structure_cache(cache_path, cache)
@@ -286,10 +306,24 @@ def build_dataset(
         wavenumbers=last_wn.astype(np.float32),
     )
 
+    meta_df = pd.DataFrame(meta_rows)
+    _event("writing parquet tables")
+    meta_df.to_parquet(out_dir / "meta.parquet", index=False)
+
+    # Справочник веществ (уникальные по inchikey / cas / title)
+    compounds = _build_compounds_table(meta_df)
+    compounds.to_parquet(out_dir / "compounds.parquet", index=False)
+    compounds.to_csv(out_dir / "compounds.csv", index=False, encoding="utf-8")
+    _event(f"compounds table: n={len(compounds)}")
+
     _event("writing split.json")
-    if str(dataset_version) == "dataset_v003":
+    if include_labels and str(dataset_version) == "dataset_v003":
         from ir_pipeline.dataset_split import build_split_for_dataset, fractions_from_train_frac
 
+        # labels нужны для стратификации — пишем их до split
+        pd.DataFrame(rows_spec).to_parquet(out_dir / "labels_spectrum.parquet", index=False)
+        pd.DataFrame(rows_str).to_parquet(out_dir / "labels_structure.parquet", index=False)
+        pd.DataFrame(rows_smarts).to_parquet(out_dir / "labels_structure_smarts.parquet", index=False)
         build_split_for_dataset(
             out_dir,
             bands_yaml,
@@ -299,31 +333,20 @@ def build_dataset(
             group_by_inchikey=True,
         )
     else:
-        rng = np.random.default_rng(int(split_seed))
-        uids = np.array(spectrum_ids, dtype=object)
-        perm = rng.permutation(len(uids))
-        u_shuf = uids[perm]
-        split_idx = int(max(1, round(float(train_frac) * len(u_shuf))))
-        train_ids = u_shuf[:split_idx].tolist()
-        test_ids = u_shuf[split_idx:].tolist()
-        if not test_ids:
-            test_ids = train_ids
-        split_payload = {
-            "version": 1,
-            "seed": int(split_seed),
-            "train_frac": float(train_frac),
-            "train_ids": train_ids,
-            "test_ids": test_ids,
-        }
-        (out_dir / "split.json").write_text(json.dumps(split_payload, indent=2, ensure_ascii=False), encoding="utf-8")
-
-    meta_df = pd.DataFrame(meta_rows)
-    _event("writing parquet tables")
-    meta_df.to_parquet(out_dir / "meta.parquet", index=False)
-
-    pd.DataFrame(rows_spec).to_parquet(out_dir / "labels_spectrum.parquet", index=False)
-    pd.DataFrame(rows_str).to_parquet(out_dir / "labels_structure.parquet", index=False)
-    pd.DataFrame(rows_smarts).to_parquet(out_dir / "labels_structure_smarts.parquet", index=False)
+        if include_labels:
+            pd.DataFrame(rows_spec).to_parquet(out_dir / "labels_spectrum.parquet", index=False)
+            pd.DataFrame(rows_str).to_parquet(out_dir / "labels_structure.parquet", index=False)
+            pd.DataFrame(rows_smarts).to_parquet(out_dir / "labels_structure_smarts.parquet", index=False)
+        else:
+            for name in (
+                "labels_spectrum.parquet",
+                "labels_structure.parquet",
+                "labels_structure_smarts.parquet",
+            ):
+                p = out_dir / name
+                if p.exists():
+                    p.unlink()
+        _write_simple_split(out_dir, spectrum_ids, meta_df, split_seed=split_seed, train_frac=train_frac)
 
     n_spec_pos = int(pd.DataFrame(rows_spec)["observed_peak_cm1"].notna().sum()) if rows_spec else 0
     n_str_pos = int(pd.DataFrame(rows_str)["observed_peak_cm1"].notna().sum()) if rows_str else 0
@@ -338,12 +361,14 @@ def build_dataset(
         "raw_jcamp_dir": str(raw_jcamp_dir_resolved.resolve()),
         "n_files_seen": len(files),
         "n_spectra_ok": int(len(spectrum_ids)),
+        "n_compounds": int(len(compounds)),
         "qc_failed": qc_failed,
         "structure_unresolved_estimate": int(struct_failed),
         "structure_cache_seeded_from_lamblador": int(seeded_structures),
         "resolve_missing_structures": bool(resolve_missing_structures),
+        "include_labels": bool(include_labels),
         "band_ids": band_ids,
-        "bands_config": str(bands_yaml.resolve()),
+        "bands_config": str(bands_yaml.resolve()) if include_labels else None,
         "grid": {"min": 400.0, "max": 4000.0, "step": 2.0},
         "split_seed": int(split_seed),
         "train_frac": float(train_frac),
@@ -352,24 +377,137 @@ def build_dataset(
             "X_absorbance_corrected": "after ALS baseline + smoothing",
             "X_absorbance_like_interp": "interpolated absorbance/transmittance-derived on grid",
         },
-        "label_files": {
-            "labels_spectrum.parquet": "peaks in band regions (no SMARTS filter)",
-            "labels_structure.parquet": "SMARTS match + observed peak in region",
-            "labels_structure_smarts.parquet": "SMARTS match only (peak optional in optional_peak_cm1)",
+        "compound_files": {
+            "meta.parquet": "per-spectrum metadata + structure ids",
+            "compounds.parquet": "unique substances aggregated from meta",
+            "compounds.csv": "same as compounds.parquet (CSV)",
         },
-        "label_positive_rows": {
-            "spectrum": n_spec_pos,
-            "structure": n_str_pos,
-            "structure_smarts": n_smarts_pos,
-        },
+        "label_files": (
+            {
+                "labels_spectrum.parquet": "peaks in band regions (no SMARTS filter)",
+                "labels_structure.parquet": "SMARTS match + observed peak in region",
+                "labels_structure_smarts.parquet": "SMARTS match only (peak optional in optional_peak_cm1)",
+            }
+            if include_labels
+            else {}
+        ),
+        "label_positive_rows": (
+            {
+                "spectrum": n_spec_pos,
+                "structure": n_str_pos,
+                "structure_smarts": n_smarts_pos,
+            }
+            if include_labels
+            else {}
+        ),
     }
     _event("writing manifest.json")
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     _event(
-        f"build-dataset done: ok={len(spectrum_ids)}, qc_failed={qc_failed}, unresolved={struct_failed}, out={out_dir}"
+        f"build-dataset done: ok={len(spectrum_ids)}, qc_failed={qc_failed}, unresolved={struct_failed}, "
+        f"compounds={len(compounds)}, labels={'on' if include_labels else 'off'}, out={out_dir}"
     )
 
     return out_dir
+
+
+def _build_compounds_table(meta_df: pd.DataFrame) -> pd.DataFrame:
+    """Уникальные вещества по inchikey (fallback: cas / title) + число спектров."""
+    cols_out = [
+        "compound_key",
+        "inchikey",
+        "inchi",
+        "smiles",
+        "cas",
+        "title",
+        "molform",
+        "n_spectra",
+        "structure_source",
+    ]
+    ok = meta_df[meta_df["qc_ok"] == True].copy() if "qc_ok" in meta_df.columns else meta_df.copy()  # noqa: E712
+    if ok.empty:
+        return pd.DataFrame(columns=cols_out)
+
+    for col in ("inchikey", "jcamp_inchikey", "cas", "title", "inchi", "smiles", "molform", "structure_source"):
+        if col not in ok.columns:
+            ok[col] = None
+
+    def _compound_key(row: pd.Series) -> str:
+        for col in ("inchikey", "jcamp_inchikey", "cas", "title"):
+            v = row.get(col)
+            if v is not None and not (isinstance(v, float) and np.isnan(v)) and str(v).strip():
+                return f"{col}:{str(v).strip()}"
+        return f"spectrum:{row.get('spectrum_id')}"
+
+    ok["compound_key"] = ok.apply(_compound_key, axis=1)
+
+    def _first_nonnull(series: pd.Series):
+        for v in series:
+            if v is None:
+                continue
+            if isinstance(v, float) and np.isnan(v):
+                continue
+            s = str(v).strip()
+            if s and s.lower() != "nan":
+                return v
+        return None
+
+    agg = (
+        ok.groupby("compound_key", sort=False)
+        .agg(
+            inchikey=("inchikey", _first_nonnull),
+            inchi=("inchi", _first_nonnull),
+            smiles=("smiles", _first_nonnull),
+            cas=("cas", _first_nonnull),
+            title=("title", _first_nonnull),
+            molform=("molform", _first_nonnull),
+            n_spectra=("spectrum_id", "count"),
+            structure_source=("structure_source", _first_nonnull),
+        )
+        .reset_index()
+    )
+    return agg.sort_values(["n_spectra", "compound_key"], ascending=[False, True]).reset_index(drop=True)
+
+
+def _write_simple_split(
+    out_dir: Path,
+    spectrum_ids: list[str],
+    meta_df: pd.DataFrame,
+    *,
+    split_seed: int,
+    train_frac: float,
+) -> None:
+    """Простой split по группам inchikey (без стратификации по labels)."""
+    rng = np.random.default_rng(int(split_seed))
+    ok = meta_df[meta_df["qc_ok"] == True]  # noqa: E712
+    sid_to_group: dict[str, str] = {}
+    for _, r in ok.iterrows():
+        sid = str(r["spectrum_id"])
+        ik = r.get("inchikey")
+        if ik is not None and not (isinstance(ik, float) and np.isnan(ik)) and str(ik).strip():
+            sid_to_group[sid] = f"ik:{str(ik).strip()}"
+        else:
+            sid_to_group[sid] = f"sid:{sid}"
+
+    groups = sorted(set(sid_to_group.get(s, f"sid:{s}") for s in spectrum_ids))
+    perm = rng.permutation(len(groups))
+    g_shuf = [groups[i] for i in perm]
+    split_idx = int(max(1, round(float(train_frac) * len(g_shuf))))
+    train_g = set(g_shuf[:split_idx])
+    test_g = set(g_shuf[split_idx:]) or train_g
+    train_ids = [s for s in spectrum_ids if sid_to_group.get(s, f"sid:{s}") in train_g]
+    test_ids = [s for s in spectrum_ids if sid_to_group.get(s, f"sid:{s}") in test_g]
+    if not test_ids:
+        test_ids = list(train_ids)
+    payload = {
+        "version": 1,
+        "seed": int(split_seed),
+        "train_frac": float(train_frac),
+        "group_by_inchikey": True,
+        "train_ids": train_ids,
+        "test_ids": test_ids,
+    }
+    (out_dir / "split.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def resolve_missing_structures_for_dataset(
@@ -392,13 +530,17 @@ def resolve_missing_structures_for_dataset(
 
     attempted = 0
     resolved = 0
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str, str, str]] = set()
     for _, row in tqdm(unresolved.iterrows(), total=len(unresolved), desc="Resolve missing structures"):
         cas_value = row.get("cas")
         title_value = row.get("title")
+        inchi_value = row.get("jcamp_inchi", row.get("inchi"))
+        inchikey_value = row.get("jcamp_inchikey", row.get("inchikey"))
         cas = "" if pd.isna(cas_value) else str(cas_value).strip()
         title = "" if pd.isna(title_value) else str(title_value).strip()
-        key = (cas, title[:220])
+        inchi = "" if pd.isna(inchi_value) else str(inchi_value).strip()
+        inchikey = "" if pd.isna(inchikey_value) else str(inchikey_value).strip()
+        key = (cas, title[:220], inchi[:80], inchikey)
         if key in seen:
             continue
         seen.add(key)
@@ -410,6 +552,8 @@ def resolve_missing_structures_for_dataset(
             cache,
             pubchem_sleep_s,
             allow_network=True,
+            inchi=inchi or None,
+            inchikey=inchikey or None,
         )
         if res.get("smiles"):
             resolved += 1

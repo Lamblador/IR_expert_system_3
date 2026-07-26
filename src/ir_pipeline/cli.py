@@ -26,6 +26,7 @@ from ir_pipeline.dataset_split import (
     build_split_for_dataset,
     copy_dataset_version,
 )
+from ir_pipeline.dataset_merge import merge_dataset_versions
 from ir_pipeline.resnet_input import write_augmented_model_inputs
 from ir_pipeline.dataset_build import build_dataset, resolve_missing_structures_for_dataset
 from ir_pipeline.evaluate import evaluate_run
@@ -190,6 +191,12 @@ def fetch_data_cmd(
     is_flag=True,
     help="медленный добор неизвестных CAS/TITLE через PubChem; по умолчанию сборка только по быстрому кэшу",
 )
+@click.option(
+    "--no-labels/--with-labels",
+    default=False,
+    show_default=True,
+    help="без labels_*.parquet: только спектры + meta/compounds (вещества)",
+)
 @click.option("--split-seed", type=int, default=42)
 @click.option("--train-frac", type=float, default=0.85)
 def build_dataset_cmd(
@@ -198,6 +205,7 @@ def build_dataset_cmd(
     max_files: int,
     pubchem_sleep: float,
     resolve_missing_structures: bool,
+    no_labels: bool,
     split_seed: int,
     train_frac: float,
 ):
@@ -214,6 +222,7 @@ def build_dataset_cmd(
         resolve_missing_structures=resolve_missing_structures,
         split_seed=split_seed,
         train_frac=train_frac,
+        include_labels=not no_labels,
     )
     click.echo(f"Dataset written to {out}")
 
@@ -257,6 +266,60 @@ def dataset_copy_version_cmd(paths: Path, from_version: str, to_version: str, ov
     p = resolve_paths(cfg)
     dst = copy_dataset_version(p["processed_root"], from_version, to_version, overwrite=overwrite)
     click.echo(f"Copied → {dst}")
+
+
+@main.command("dataset-merge-versions")
+@click.option("--paths", type=click.Path(exists=True, path_type=Path), default=Path("configs/paths.local.yaml"))
+@click.option(
+    "--from-version",
+    "from_versions",
+    multiple=True,
+    required=True,
+    help="исходная версия (укажите ≥2 раза), например dataset_v003 и dataset_spectra_full",
+)
+@click.option("--to-version", "to_version", required=True, help="имя объединённой версии")
+@click.option(
+    "--tag",
+    "tags",
+    multiple=True,
+    help="метка source_dataset для каждой --from-version (столько же значений, опционально)",
+)
+@click.option("--overwrite", is_flag=True, help="перезаписать целевой каталог")
+@click.option(
+    "--with-labels/--no-labels",
+    default=False,
+    show_default=True,
+    help="склеить labels_*.parquet (по умолчанию только спектры + meta/compounds)",
+)
+@click.option("--split-seed", type=int, default=42, show_default=True)
+@click.option("--train-frac", type=float, default=0.85, show_default=True)
+def dataset_merge_versions_cmd(
+    paths: Path,
+    from_versions: tuple[str, ...],
+    to_version: str,
+    tags: tuple[str, ...],
+    overwrite: bool,
+    with_labels: bool,
+    split_seed: int,
+    train_frac: float,
+):
+    """Склеить уже собранные датасеты (NIST + SDBS и т.п.) без пересборки JCAMP."""
+    if len(from_versions) < 2:
+        raise click.ClickException("Укажите минимум два --from-version")
+    cfg = load_yaml(paths)
+    p = resolve_paths(cfg)
+    tag_list = list(tags) if tags else None
+    dst = merge_dataset_versions(
+        p["processed_root"],
+        list(from_versions),
+        to_version,
+        overwrite=overwrite,
+        include_labels=with_labels,
+        split_seed=split_seed,
+        train_frac=train_frac,
+        source_tags=tag_list,
+    )
+    click.echo(f"Merged -> {dst}")
 
 
 @main.command("dataset-split")

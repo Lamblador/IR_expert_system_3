@@ -64,13 +64,47 @@ def build_multilabel_matrix(
     return Y, class_names
 
 
+def _scalar_peak_cm1(value: object) -> float | None:
+    """Безопасно извлекает скалярный cm⁻¹ (защита от дубликатов колонок → Series)."""
+    if value is None:
+        return None
+    if isinstance(value, pd.Series):
+        if value.empty:
+            return None
+        # берём первое не-NaN значение
+        for v in value.tolist():
+            if v is not None and not (isinstance(v, float) and np.isnan(v)) and pd.notna(v):
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    continue
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (ValueError, TypeError):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _plot_peak_labels(ax, labels_df: pd.DataFrame, color: str, alpha: float = 0.5) -> int:
     n = 0
-    for _, r in labels_df.iterrows():
-        cm = r.get("observed_peak_cm1")
-        if cm is None or pd.isna(cm):
+    if labels_df is None or labels_df.empty:
+        return 0
+    # при дубликатах имён колонок берём первый столбец с пиком
+    if "observed_peak_cm1" not in labels_df.columns:
+        return 0
+    peak_series = labels_df["observed_peak_cm1"]
+    if isinstance(peak_series, pd.DataFrame):
+        peak_series = peak_series.iloc[:, 0]
+    for cm in peak_series.tolist():
+        peak = _scalar_peak_cm1(cm)
+        if peak is None:
             continue
-        ax.axvline(float(cm), color=color, alpha=alpha, lw=0.75)
+        ax.axvline(peak, color=color, alpha=alpha, lw=0.75)
         n += 1
     return n
 
@@ -148,10 +182,20 @@ def plot_dataset_preview(
 
         if n_panels == 4:
             if not labels_smarts.empty:
-                sub_smarts = labels_smarts[labels_smarts["spectrum_id"] == sid]
-                peak_col = "optional_peak_cm1" if "optional_peak_cm1" in sub_smarts.columns else "observed_peak_cm1"
-                sub_smarts_plot = sub_smarts[sub_smarts[peak_col].notna()].copy()
-                sub_smarts_plot = sub_smarts_plot.rename(columns={peak_col: "observed_peak_cm1"})
+                sub_smarts = labels_smarts[labels_smarts["spectrum_id"] == sid].copy()
+                # SMARTS-only: пик лежит в optional_peak_cm1; не делаем rename поверх
+                # observed_peak_cm1 — иначе получаются дубликаты колонок.
+                if "optional_peak_cm1" in sub_smarts.columns:
+                    peak_vals = sub_smarts["optional_peak_cm1"]
+                else:
+                    peak_vals = sub_smarts["observed_peak_cm1"]
+                sub_smarts_plot = pd.DataFrame(
+                    {
+                        "spectrum_id": sub_smarts["spectrum_id"].values,
+                        "observed_peak_cm1": peak_vals.values,
+                    }
+                )
+                sub_smarts_plot = sub_smarts_plot[sub_smarts_plot["observed_peak_cm1"].notna()]
             else:
                 sub_smarts_plot = pd.DataFrame()
             axes[3].plot(wn, ab, "k-", lw=0.7)

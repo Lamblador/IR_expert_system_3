@@ -1,4 +1,8 @@
-"""Генератор Colab-ноутбуков (каждый ноутбук автономный)."""
+"""Генератор ноутбуков dual-workflow (Local Jupyter + Google Colab).
+
+Источник истины для colab_00…05 и colab_07. Запуск:
+  python notebooks/_make_colab_notebooks.py
+"""
 from __future__ import annotations
 
 import json
@@ -34,14 +38,246 @@ def code(source: str) -> dict:
     }
 
 
-def mount_google_drive_cell() -> dict:
-    return code(
-        "from google.colab import drive\n"
-        "drive.mount('/content/drive')\n"
-        "from pathlib import Path\n"
-        "IR_DATA = Path('/content/drive/MyDrive/ir_data')\n"
-        "print('IR_DATA exists:', IR_DATA.exists(), IR_DATA)\n"
+# ---------------------------------------------------------------------------
+# Dual-workflow header (A Colab / B Local / C paths+data)
+# ---------------------------------------------------------------------------
+
+def md_env_choice() -> dict:
+    return md(
+        "## Выбор среды (выполните ОДНУ ячейку)\n\n"
+        "| Среда | Запустить | Пропустить |\n"
+        "|-------|-----------|------------|\n"
+        "| **Google Colab** | **A. Colab** (+ при полном датасете **A2. Drive**) | **B. Local** |\n"
+        "| **Локальный Jupyter** | **B. Local** | **A** и **A2** (включая `drive.mount`) |\n\n"
+        "После A или B выполните **C. Пути и данные**.\n"
+        "Подробнее: [`docs/NOTEBOOKS.md`](../docs/NOTEBOOKS.md).\n"
     )
+
+
+def cell_env_colab() -> dict:
+    """A. Colab: clone в /content, pip install. Не запускать локально."""
+    return code(
+        "# === A. Colab: окружение ===\n"
+        "# Локально эту ячейку НЕ запускайте (см. B. Local).\n"
+        "import os\n"
+        "import subprocess\n"
+        "import sys\n"
+        "from pathlib import Path\n\n"
+        "REPO_URL = 'https://github.com/Lamblador/IR_expert_system_3.git'\n"
+        "REPO_BRANCH = 'colab-v1'\n"
+        "REPO_DIR = Path('/content/IR_expert_system_3')\n\n"
+        "def _run_git(cmd, cwd=None):\n"
+        "    print('git', ' '.join(cmd))\n"
+        "    subprocess.run(cmd, cwd=cwd, check=True)\n\n"
+        "if (REPO_DIR / '.git').is_dir():\n"
+        "    _run_git(['git', 'fetch', 'origin', REPO_BRANCH], cwd=REPO_DIR)\n"
+        "    _run_git(['git', 'checkout', REPO_BRANCH], cwd=REPO_DIR)\n"
+        "    _run_git(['git', 'pull', '--ff-only', 'origin', REPO_BRANCH], cwd=REPO_DIR)\n"
+        "else:\n"
+        "    if REPO_DIR.exists():\n"
+        "        raise RuntimeError(f'{REPO_DIR} существует, но это не git-репозиторий')\n"
+        "    _run_git([\n"
+        "        'git', 'clone', '-b', REPO_BRANCH, '--single-branch',\n"
+        "        REPO_URL, str(REPO_DIR),\n"
+        "    ])\n\n"
+        "ROOT = REPO_DIR.resolve()\n"
+        "os.chdir(ROOT)\n"
+        "try:\n"
+        "    from IPython import get_ipython\n"
+        "    get_ipython().run_line_magic('cd', str(ROOT))\n"
+        "except Exception:\n"
+        "    pass\n"
+        "rev = subprocess.check_output(\n"
+        "    ['git', 'rev-parse', '--short', 'HEAD'], cwd=ROOT, text=True\n"
+        ").strip()\n"
+        "print(f'ROOT: {ROOT} @ {REPO_BRANCH} ({rev})')\n"
+        "subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '-e', '.[torch]'], check=True)\n"
+        "print('pip install OK')\n"
+        "IR_ENV = 'colab'\n"
+    )
+
+
+def cell_env_colab_drive() -> dict:
+    """A2. Mount Drive — только Colab full. Не запускать локально / smoke."""
+    return code(
+        "# === A2. Colab Drive (full dataset) ===\n"
+        "# Нужен только для полного датасета на Google Drive.\n"
+        "# Для HF smoke (dataset_mini) эту ячейку ПРОПУСТИТЕ.\n"
+        "# Локально НЕ запускайте.\n"
+        "from pathlib import Path\n"
+        "from google.colab import drive\n\n"
+        "drive.mount('/content/drive')\n"
+        "IR_DATA = Path('/content/drive/MyDrive/ir_data')\n"
+        "RUNS_DRIVE = Path('/content/drive/MyDrive/ir_expert_system_3/runs')\n"
+        "RUNS_DRIVE.mkdir(parents=True, exist_ok=True)\n"
+        "print('IR_DATA exists:', IR_DATA.exists(), IR_DATA)\n"
+        "print('RUNS_DRIVE:', RUNS_DRIVE)\n"
+    )
+
+
+def cell_env_local() -> dict:
+    """B. Local: walk-up к pyproject.toml, без checkout ветки."""
+    return code(
+        "# === B. Local: окружение ===\n"
+        "# В Google Colab эту ячейку НЕ запускайте (см. A. Colab).\n"
+        "import os\n"
+        "import subprocess\n"
+        "import sys\n"
+        "from pathlib import Path\n\n"
+        "def _find_repo_root(start: Path) -> Path:\n"
+        "    \"\"\"Walk-up до каталога с pyproject.toml (фикс nested-clone из notebooks/).\"\"\"\n"
+        "    cur = start.resolve()\n"
+        "    for p in [cur, *cur.parents]:\n"
+        "        if (p / 'pyproject.toml').is_file():\n"
+        "            return p\n"
+        "    raise FileNotFoundError(\n"
+        "        'Не найден pyproject.toml выше cwd. '\n"
+        "        'Откройте ноутбук из клона репозитория или cd в корень IR_expert_system_3.'\n"
+        "    )\n\n"
+        "ROOT = _find_repo_root(Path.cwd())\n"
+        "os.chdir(ROOT)\n"
+        "try:\n"
+        "    from IPython import get_ipython\n"
+        "    get_ipython().run_line_magic('cd', str(ROOT))\n"
+        "except Exception:\n"
+        "    pass\n"
+        "print('ROOT (local, ветку не переключаем):', ROOT)\n\n"
+        "FORCE_REINSTALL = False  # True — принудительно pip install -e .[torch]\n"
+        "need_install = FORCE_REINSTALL\n"
+        "if not need_install:\n"
+        "    try:\n"
+        "        import ir_pipeline  # noqa: F401\n"
+        "    except ImportError:\n"
+        "        need_install = True\n"
+        "if need_install:\n"
+        "    subprocess.run(\n"
+        "        [sys.executable, '-m', 'pip', 'install', '-q', '-e', '.[torch]'],\n"
+        "        check=True,\n"
+        "    )\n"
+        "    print('pip install OK')\n"
+        "else:\n"
+        "    print('ir_pipeline уже установлен — pip пропущен (FORCE_REINSTALL=True для переустановки)')\n"
+        "IR_ENV = 'local'\n"
+    )
+
+
+def cell_paths_and_data(
+    *,
+    default_mode: str = "auto",
+    smoke_version: str = "dataset_mini",
+    full_version: str = "dataset_v003",
+    fetch_hf_if_missing: bool = True,
+) -> dict:
+    """C. Пути: local / colab_smoke / colab_full → ROOT, PATHS_YAML, paths, DATASET_DIR, …"""
+    if fetch_hf_if_missing:
+        missing_block = (
+            "    if DATA_MODE == 'colab_smoke':\n"
+            "        print(f'{DATASET_DIR} нет → fetch HF {SMOKE_VERSION}.zip')\n"
+            f"        !ir-pipeline fetch-data --filename {smoke_version}.zip --extract-to data/processed\n"
+            "        if not spectra.is_file():\n"
+            "            raise FileNotFoundError(f'После fetch нет {spectra}')\n"
+            "    else:\n"
+            "        raise FileNotFoundError(\n"
+            "            f'Нет {spectra}. Проверьте paths yaml / Drive / локальные каталоги. '\n"
+            "            f'DATA_MODE={DATA_MODE}, PATHS_YAML={PATHS_YAML}'\n"
+            "        )\n"
+        )
+    else:
+        missing_block = (
+            "    raise FileNotFoundError(\n"
+            "        f'Нет {spectra}. DATA_MODE={DATA_MODE}, PATHS_YAML={PATHS_YAML}'\n"
+            "    )\n"
+        )
+    src = (
+        "# === C. Пути и данные ===\n"
+        "# Выполните после A или B. Контракт: ROOT, PATHS_YAML, paths, DATASET_DIR, BANDS_YAML, RUNS_DIR\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "from ir_pipeline.config_loader import load_yaml, resolve_paths\n\n"
+        f"SMOKE_VERSION = '{smoke_version}'\n"
+        f"FULL_VERSION = '{full_version}'\n"
+        "# Режим данных (если IR_ENV не задан — auto):\n"
+        "#   'local'       — configs/paths.local.yaml\n"
+        "#   'colab_smoke' — HF mini, paths.huggingface.yaml\n"
+        "#   'colab_full'  — Drive, paths.colab.yaml\n"
+        f"DATA_MODE = '{default_mode}'  # или 'local' | 'colab_smoke' | 'colab_full'\n\n"
+        "if 'IR_ENV' not in globals():\n"
+        "    IR_ENV = 'colab' if Path('/content').exists() else 'local'\n\n"
+        "if DATA_MODE == 'auto':\n"
+        "    if IR_ENV == 'local':\n"
+        "        DATA_MODE = 'local'\n"
+        "    elif 'IR_DATA' in globals() and Path(IR_DATA).exists():\n"
+        "        DATA_MODE = 'colab_full'\n"
+        "    else:\n"
+        "        DATA_MODE = 'colab_smoke'\n\n"
+        "if DATA_MODE == 'local':\n"
+        "    PATHS_YAML = Path('configs/paths.local.yaml')\n"
+        "    if not PATHS_YAML.is_file():\n"
+        "        raise FileNotFoundError(\n"
+        "            'Нет configs/paths.local.yaml — скопируйте configs/paths.local.example.yaml '\n"
+        "            'и пропишите raw_jcamp_dir / processed_root.'\n"
+        "        )\n"
+        "elif DATA_MODE == 'colab_full':\n"
+        "    if 'IR_DATA' not in globals():\n"
+        "        raise RuntimeError('Colab full: сначала выполните A2 (Drive mount) → IR_DATA')\n"
+        "    os.environ['IR_PROCESSED_ROOT'] = str(Path(IR_DATA) / 'processed')\n"
+        "    PATHS_YAML = Path('configs/paths.colab.yaml')\n"
+        "elif DATA_MODE == 'colab_smoke':\n"
+        "    PATHS_YAML = Path('configs/paths.huggingface.yaml')\n"
+        "else:\n"
+        "    raise ValueError(f'Неизвестный DATA_MODE={DATA_MODE!r}')\n\n"
+        "paths_cfg = load_yaml(PATHS_YAML)\n"
+        "if DATA_MODE == 'colab_smoke':\n"
+        "    paths_cfg['dataset_version'] = SMOKE_VERSION\n"
+        "    paths_cfg.pop('dataset_profile', None)\n"
+        "elif DATA_MODE == 'colab_full':\n"
+        "    paths_cfg['dataset_version'] = paths_cfg.get('dataset_version') or FULL_VERSION\n"
+        "# local: dataset_version / profile из yaml\n\n"
+        "paths = resolve_paths(paths_cfg)\n"
+        "DATASET_DIR = paths['processed_root'] / str(paths['dataset_version'])\n"
+        "BANDS_YAML = paths['bands_config']\n"
+        "RUNS_DIR = Path('runs')\n"
+        "RUNS_DIR.mkdir(parents=True, exist_ok=True)\n\n"
+        "spectra = DATASET_DIR / 'spectra.npz'\n"
+        "if not spectra.is_file():\n"
+        + missing_block
+        + "print('DATA_MODE:', DATA_MODE)\n"
+        "print('PATHS_YAML:', PATHS_YAML)\n"
+        "print('DATASET_DIR:', DATASET_DIR)\n"
+        "print('dataset_version:', paths['dataset_version'])\n"
+        "print('raw_jcamp_dir:', paths['raw_jcamp_dir'])\n"
+    )
+    return code(src)
+
+
+def notebook_header(
+    title_md: str,
+    *,
+    include_drive: bool = True,
+    default_mode: str = "auto",
+    smoke_version: str = "dataset_mini",
+    full_version: str = "dataset_v003",
+    fetch_hf_if_missing: bool = True,
+) -> list[dict]:
+    """Стандартная шапка: title + env choice + A [+A2] + B + C."""
+    cells = [md(title_md), md_env_choice(), cell_env_colab()]
+    if include_drive:
+        cells.append(md("### A2. Google Drive (только Colab full)\n\nПропустите для HF smoke и локально."))
+        cells.append(cell_env_colab_drive())
+    cells.extend(
+        [
+            md("### B. Локальный Jupyter\n\nПропустите в Colab."),
+            cell_env_local(),
+            md("### C. Пути и данные\n\nПосле A или B."),
+            cell_paths_and_data(
+                default_mode=default_mode,
+                smoke_version=smoke_version,
+                full_version=full_version,
+                fetch_hf_if_missing=fetch_hf_if_missing,
+            ),
+        ]
+    )
+    return cells
 
 
 def md_cnn_hyperparameters() -> dict:
@@ -53,91 +289,30 @@ def md_cnn_hyperparameters() -> dict:
         "| **Learning rate** | `torch_lr: 0.001` | тот же yaml |\n"
         "| **Batch size** | `torch_batch_size: 32` | тот же yaml |\n"
         "| **Оптимизатор** | `torch_optimizer: adamw` | `adamw` \\| `adam` \\| `sgd` |\n"
-        "| **Метки** | `structure` / `structure_smarts` / `spectrum` | `--label-schema` в CLI или kwarg в `train_irresnet_run` |\n"
-        "| **Loss (IrResnet)** | `torch_loss: bce_with_logits` | multi-label BCE с logits |\n"
-        "| **Loss (torch-train 1D CNN)** | `smooth_l1` | в `configs/train_torch_colab.yaml`: `smooth_l1` или `mse` |\n"
-        "| **Размер скрытого слоя** | `ir_hidden_size: 34` | только IrResnet |\n"
-        "| **Live-графики** | `live_training_plot: true` | в Colab: clear + график каждую эпоху; лог — последние 5 значений |\n\n"
-        "В ячейке обучения ниже используется `--config configs/train_irresnet_colab.yaml`. "
-        "Скопируйте yaml, измените числа, сохраните и укажите свой путь в `--config`.\n"
+        "| **Метки** | `structure` / `structure_smarts` / `spectrum` | `--label-schema` или kwarg |\n"
+        "| **Loss (IrResnet)** | `torch_loss: bce_with_logits` | multi-label BCE |\n"
+        "| **Hidden** | `ir_hidden_size: 34` | только IrResnet |\n"
+        "| **Live-графики** | `live_training_plot: true` | Colab: clear + график |\n\n"
+        "Ниже используется `configs/train_irresnet_colab.yaml`. "
+        "Скопируйте yaml и укажите свой `--config`.\n"
     )
-
-
-def bootstrap_cell(extra: str = "") -> dict:
-    src = (
-        "import subprocess\n"
-        "import sys\n"
-        "from pathlib import Path\n\n"
-        "REPO_URL = \"https://github.com/Lamblador/IR_expert_system_3.git\"\n"
-        "REPO_BRANCH = \"colab-v1\"\n"
-        "REPO_DIR_NAME = \"IR_expert_system_3\"\n\n"
-        "def _run_git(cmd: list[str], cwd: Path | None = None) -> None:\n"
-        "    print('git', ' '.join(cmd), f'(cwd={cwd})' if cwd else '')\n"
-        "    subprocess.run(cmd, cwd=cwd, check=True)\n\n"
-        "def _ensure_repo_at(repo_dir: Path) -> None:\n"
-        "    if (repo_dir / '.git').is_dir():\n"
-        "        _run_git(['git', 'fetch', 'origin', REPO_BRANCH], cwd=repo_dir)\n"
-        "        _run_git(['git', 'checkout', REPO_BRANCH], cwd=repo_dir)\n"
-        "        _run_git(['git', 'pull', '--ff-only', 'origin', REPO_BRANCH], cwd=repo_dir)\n"
-        "    else:\n"
-        "        if repo_dir.exists():\n"
-        "            raise RuntimeError(f'{repo_dir} существует, но это не git-репозиторий')\n"
-        "        _run_git([\n"
-        "            'git', 'clone', '-b', REPO_BRANCH, '--single-branch',\n"
-        "            REPO_URL, str(repo_dir),\n"
-        "        ])\n"
-        "    rev = subprocess.check_output(\n"
-        "        ['git', 'rev-parse', '--short', 'HEAD'], cwd=repo_dir, text=True\n"
-        "    ).strip()\n"
-        "    print(f'Репозиторий: {repo_dir.resolve()} @ {REPO_BRANCH} ({rev})')\n\n"
-        "cwd = Path.cwd()\n"
-        "in_colab = Path('/content').exists() and str(cwd).startswith('/content')\n"
-        "local_repo = (cwd / 'pyproject.toml').is_file()\n\n"
-        "if local_repo and not in_colab:\n"
-        "    ROOT = cwd.resolve()\n"
-        "    print('Локальный репозиторий (ветку не переключаем):', ROOT)\n"
-        "elif (cwd / REPO_DIR_NAME / 'pyproject.toml').is_file():\n"
-        "    ROOT = (cwd / REPO_DIR_NAME).resolve()\n"
-        "    _ensure_repo_at(ROOT)\n"
-        "elif Path(f'/content/{REPO_DIR_NAME}/pyproject.toml').is_file():\n"
-        "    ROOT = Path(f'/content/{REPO_DIR_NAME}').resolve()\n"
-        "    _ensure_repo_at(ROOT)\n"
-        "else:\n"
-        "    ROOT = (Path('/content') / REPO_DIR_NAME if in_colab else cwd / REPO_DIR_NAME).resolve()\n"
-        "    _ensure_repo_at(ROOT)\n\n"
-        "import os\n"
-        "os.chdir(ROOT)\n"
-        "try:\n"
-        "    from IPython import get_ipython\n"
-        "    get_ipython().run_line_magic('cd', str(ROOT))\n"
-        "except Exception:\n"
-        "    pass\n"
-        "print('ROOT:', ROOT.resolve())\n"
-        "subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '-e', '.[torch]'], check=True)\n"
-        "help_txt = subprocess.check_output(['ir-pipeline', '--help'], text=True)\n"
-        "if ' run ' not in help_txt:\n"
-        "    print('WARNING: команда `run` отсутствует. Ноутбук использует fallback без run-stage.')\n"
-    )
-    if extra:
-        src += "\n" + extra + "\n"
-    return code(src)
 
 
 def md_manual_dataset_upload() -> dict:
     return md(
-        "## Датасет: загрузка вручную\n\n"
-        "1. **Files → Upload** в Colab: `dataset_v001.zip` / `dataset_mini.zip` в `/content` "
-        "(или положите архив на Google Drive).\n"
-        "2. Выполните ячейку распаковки ниже — ожидается `data/processed/<версия>/spectra.npz`.\n"
-        "3. Если архива нет — следующая ячейка скачает мини-датасет с Hugging Face.\n"
+        "## (Опционально) Zip вручную в Colab\n\n"
+        "1. **Files → Upload**: `dataset_mini.zip` / `dataset_v003.zip` в `/content` или Drive.\n"
+        "2. Ячейка ниже ищет и распаковывает в `data/processed/`.\n"
+        "3. Иначе ячейка **C** скачает mini с Hugging Face (режим `colab_smoke`).\n"
     )
 
 
 def extract_manual_datasets_cell(
-    versions: tuple[str, ...] = ("dataset_mini", "dataset_v001"),
+    versions: tuple[str, ...] = ("dataset_mini", "dataset_v003"),
 ) -> dict:
     versions_literal = repr(versions)
     return code(
+        "# Опционально: распаковка zip (Colab). Локально обычно не нужна.\n"
         "from pathlib import Path\n"
         "import zipfile\n\n"
         f"DATASET_VERSIONS = {versions_literal}\n"
@@ -148,17 +323,14 @@ def extract_manual_datasets_cell(
         "    Path('/content/drive/MyDrive/ir_data'),\n"
         "    Path('.'),\n"
         "]\n"
-        "try:\n"
-        "    SEARCH_ROOTS.insert(0, IR_DATA)\n"
-        "except NameError:\n"
-        "    pass\n"
+        "if 'IR_DATA' in globals():\n"
+        "    SEARCH_ROOTS.insert(0, Path(IR_DATA))\n"
         "DEST = Path('data/processed')\n"
         "DEST.mkdir(parents=True, exist_ok=True)\n\n"
         "def _dataset_ready(name: str) -> bool:\n"
         "    return (DEST / name / 'spectra.npz').is_file()\n\n"
         "def _find_zip_archives() -> list[Path]:\n"
-        "    found: list[Path] = []\n"
-        "    seen: set[str] = set()\n"
+        "    found, seen = [], set()\n"
         "    for root in SEARCH_ROOTS:\n"
         "        if not root.exists():\n"
         "            continue\n"
@@ -166,21 +338,19 @@ def extract_manual_datasets_cell(
         "            key = str(p.resolve())\n"
         "            if key in seen:\n"
         "                continue\n"
-        "            low = p.name.lower()\n"
-        "            if any(v in low for v in DATASET_VERSIONS):\n"
+        "            if any(v in p.name.lower() for v in DATASET_VERSIONS):\n"
         "                seen.add(key)\n"
         "                found.append(p)\n"
         "    return sorted(found, key=lambda x: x.stat().st_mtime, reverse=True)\n\n"
         "archives = _find_zip_archives()\n"
-        "print('Найденные zip с датасетом:')\n"
-        "if archives:\n"
-        "    for p in archives[:15]:\n"
-        "        print(f'  {p} ({p.stat().st_size / 1e6:.1f} MB)')\n"
-        "else:\n"
-        "    print('  (нет — загрузите через Files → Upload)')\n\n"
+        "print('Найденные zip:')\n"
+        "for p in archives[:15]:\n"
+        "    print(f'  {p} ({p.stat().st_size / 1e6:.1f} MB)')\n"
+        "if not archives:\n"
+        "    print('  (нет)')\n\n"
         "for version in DATASET_VERSIONS:\n"
         "    if _dataset_ready(version):\n"
-        "        print(f'OK: {DEST / version} уже распакован')\n"
+        "        print(f'OK: {DEST / version}')\n"
         "        continue\n"
         "    matched = [p for p in archives if version in p.name.lower()]\n"
         "    if not matched:\n"
@@ -190,144 +360,107 @@ def extract_manual_datasets_cell(
         "    print(f'Распаковка {zp.name} → {DEST}')\n"
         "    with zipfile.ZipFile(zp) as zf:\n"
         "        zf.extractall(DEST)\n"
-        "    if _dataset_ready(version):\n"
-        "        print(f'  → готово: {DEST / version / \"spectra.npz\"}')\n"
-        "    else:\n"
-        "        print(\n"
-        "            f'  WARNING: после распаковки нет {DEST / version / \"spectra.npz\"}. '\n"
-        "            'Проверьте структуру zip (внутри должна быть папка {version}/).'\n"
-        "        )\n"
-    )
-
-
-def ensure_data_cell(
-    dataset_version: str = "dataset_mini",
-    hf_zip: str | None = None,
-) -> dict:
-    hf_zip = hf_zip or f"{dataset_version}.zip"
-    return code(
-        "from pathlib import Path\n\n"
-        f"DATASET_DIR = Path('data/processed/{dataset_version}')\n"
-        "if DATASET_DIR.joinpath('spectra.npz').is_file():\n"
-        "    print(f'OK: {DATASET_DIR}')\n"
-        "else:\n"
-        f"    print('{dataset_version} not found → fetching from HF...')\n"
-        f"    !ir-pipeline fetch-data --filename {hf_zip} --extract-to data/processed\n"
+        "    print('  →', 'OK' if _dataset_ready(version) else 'WARNING: нет spectra.npz')\n"
     )
 
 
 def md_download_run() -> dict:
     return md(
-        "## Сохранить обученную модель на локальный ПК\n\n"
-        "Выполните ячейку ниже — браузер скачает zip каталога run "
-        "(`models.joblib`, `metrics.json`, `irresnet_bundle.pt` и т.д.). "
-        "На Windows распакуйте в `runs/<имя>/` и укажите `--run-dir`.\n"
+        "## Сохранить run (только Colab)\n\n"
+        "Ячейка ниже скачает zip через браузер. **Локально пропустите** — артефакты уже в `runs/`.\n"
     )
 
 
 def download_run_zip_cell(run_dir: str, zip_name: str | None = None) -> dict:
     zip_stem = zip_name or run_dir.replace("\\", "/").strip("/").replace("/", "_")
     return code(
+        "# Только Colab. Локально пропустите.\n"
         "from pathlib import Path\n"
-        "import shutil\n"
-        "from google.colab import files\n\n"
-        f"RUN_DIR = Path('{run_dir}')\n"
-        "if not RUN_DIR.is_dir():\n"
-        "    raise FileNotFoundError(\n"
-        "        f'Нет {RUN_DIR} — сначала выполните ячейку обучения.'\n"
-        "    )\n\n"
-        "artifacts = [p for p in RUN_DIR.iterdir() if p.is_file()]\n"
-        "if not artifacts:\n"
-        "    raise FileNotFoundError(f'{RUN_DIR} пуст — нечего архивировать.')\n"
-        "print('Файлы:', [p.name for p in sorted(artifacts)])\n\n"
-        f"zip_path = Path('/content/{zip_stem}.zip')\n"
-        "if zip_path.exists():\n"
-        "    zip_path.unlink()\n"
-        "shutil.make_archive(str(zip_path.with_suffix('')), 'zip', RUN_DIR)\n"
-        "size_mb = zip_path.stat().st_size / 1e6\n"
-        "print(f'Архив: {zip_path} ({size_mb:.2f} MB)')\n"
-        "files.download(str(zip_path))\n"
-        "print('Скачивание запущено.')\n"
+        "import shutil\n\n"
+        "try:\n"
+        "    from google.colab import files\n"
+        "except ImportError:\n"
+        f"    print('Не Colab — скачивание пропущено. Смотрите', Path('{run_dir}'))\n"
+        "else:\n"
+        f"    RUN_DIR = Path('{run_dir}')\n"
+        "    if not RUN_DIR.is_dir():\n"
+        "        raise FileNotFoundError(f'Нет {RUN_DIR} — сначала обучите модель.')\n"
+        "    artifacts = [p for p in RUN_DIR.iterdir() if p.is_file()]\n"
+        "    if not artifacts:\n"
+        "        raise FileNotFoundError(f'{RUN_DIR} пуст')\n"
+        "    print('Файлы:', [p.name for p in sorted(artifacts)])\n"
+        f"    zip_path = Path('/content/{zip_stem}.zip')\n"
+        "    if zip_path.exists():\n"
+        "        zip_path.unlink()\n"
+        "    shutil.make_archive(str(zip_path.with_suffix('')), 'zip', RUN_DIR)\n"
+        "    print(f'Архив: {zip_path} ({zip_path.stat().st_size / 1e6:.2f} MB)')\n"
+        "    files.download(str(zip_path))\n"
     )
 
 
-def find_jcamp_or_zip_cell() -> dict:
-    return code(
-        "from pathlib import Path\n"
-        "import zipfile, shutil\n\n"
-        "SEARCH_ROOTS = [Path('/content'), Path('/content/IR_expert_system_3'), Path('/content/drive/MyDrive')]\n"
-        "candidates = []\n"
-        "for root in SEARCH_ROOTS:\n"
-        "    if not root.exists():\n"
-        "        continue\n"
-        "    for p in root.rglob('*'):\n"
-        "        name = p.name.lower()\n"
-        "        if p.is_dir() and name == 'downloaded_jcamp':\n"
-        "            candidates.append(('dir', p))\n"
-        "        if p.is_file() and ('downloaded_jcamp' in name and name.endswith('.zip')):\n"
-        "            candidates.append(('zip', p))\n\n"
-        "print('Found candidates:')\n"
-        "for k, p in candidates[:30]:\n"
-        "    print(k, p)\n\n"
-        "target = Path('/content/IR_expert_system_3/downloaded_jcamp')\n"
-        "target.parent.mkdir(parents=True, exist_ok=True)\n"
-        "if not target.exists():\n"
-        "    for kind, p in candidates:\n"
-        "        if kind == 'dir':\n"
-        "            print('Copying directory to', target)\n"
-        "            shutil.copytree(p, target, dirs_exist_ok=True)\n"
-        "            break\n"
-        "        if kind == 'zip':\n"
-        "            print('Extracting zip to', target)\n"
-        "            target.mkdir(parents=True, exist_ok=True)\n"
-        "            with zipfile.ZipFile(p) as zf:\n"
-        "                zf.extractall(target)\n"
-        "            break\n"
-        "print('downloaded_jcamp exists:', target.exists())\n"
-    )
-
+# ---------------------------------------------------------------------------
+# Notebook definitions
+# ---------------------------------------------------------------------------
 
 NOTEBOOKS = {
     "colab_00_setup.ipynb": [
-        md(
-            "# Этап 0: установка (автономный)\n\n"
-            "Клонирует репозиторий и ставит зависимости."
+        *notebook_header(
+            "# Этап 0: установка\n\n"
+            "**Цель:** окружение (Colab или локально) + проверка `ir-pipeline` и датасета.\n\n"
+            "**Выход:** `ROOT`, `DATASET_DIR`, установленный пакет `ir_pipeline`.\n\n"
+            "Документация: [`docs/NOTEBOOKS.md`](../docs/NOTEBOOKS.md).",
+            include_drive=True,
+            default_mode="auto",
         ),
-        bootstrap_cell(),
-        mount_google_drive_cell(),
         md_manual_dataset_upload(),
         extract_manual_datasets_cell(),
-        ensure_data_cell(),
+        code(
+            "# Проверка CLI\n"
+            "import subprocess\n"
+            "help_txt = subprocess.check_output(['ir-pipeline', '--help'], text=True)\n"
+            "print('ir-pipeline OK; run stage:', ' run ' in help_txt)\n"
+            "print('DATASET_DIR:', DATASET_DIR)\n"
+            "print('spectra.npz:', (DATASET_DIR / 'spectra.npz').is_file())\n"
+        ),
     ],
     "colab_01_dataset.ipynb": [
-        md("# Этап 1: датасет и превью (автономный)\n\nSetup + HF fetch + графики spectrum/structure labels."),
-        bootstrap_cell(),
-        mount_google_drive_cell(),
+        *notebook_header(
+            "# Этап 1: датасет и превью\n\n"
+            "**Цель:** убедиться, что датасет доступен, построить превью spectrum/structure labels.\n\n"
+            "**Выход:** `runs/colab_preview/plots/preview_*.png`.\n\n"
+            "Smoke: `dataset_mini` (HF). Local: версия из `paths.local.yaml`.",
+            default_mode="auto",
+        ),
         md_manual_dataset_upload(),
         extract_manual_datasets_cell(),
-        ensure_data_cell(),
         code(
-            "from pathlib import Path\nfrom IPython.display import Image, display\n"
+            "from pathlib import Path\n"
+            "from IPython.display import Image, display\n"
             "from ir_pipeline.dataset_preview import plot_dataset_preview\n\n"
-            "DATASET_DIR = Path('data/processed/dataset_mini')\n"
-            "plot_dataset_preview(DATASET_DIR, Path('runs/colab_preview/plots'), Path('configs/bands_reference.yaml'))\n"
-            "plots = sorted(Path('runs').rglob('preview_spectrum_0.png'))\n"
+            "OUT = RUNS_DIR / 'colab_preview' / 'plots'\n"
+            "plot_dataset_preview(DATASET_DIR, OUT, BANDS_YAML)\n"
+            "plots = sorted(OUT.glob('preview_spectrum_*.png')) or sorted(Path('runs').rglob('preview_spectrum_0.png'))\n"
             "if plots:\n"
             "    display(Image(filename=str(plots[-1]), width=900))\n"
+            "else:\n"
+            "    print('Превью PNG не найдены в', OUT)\n"
         ),
     ],
     "colab_02_baseline_rf.ipynb": [
-        md("# Этап 2: baseline RandomForest (автономный)\n\nSetup + dataset + RF + графики MAE."),
-        bootstrap_cell(),
-        mount_google_drive_cell(),
-        md_manual_dataset_upload(),
-        extract_manual_datasets_cell(),
-        ensure_data_cell(),
-        find_jcamp_or_zip_cell(),
+        *notebook_header(
+            "# Этап 2: baseline RandomForest\n\n"
+            "**Цель:** обучить RF (`spectrum_structure`) и построить графики MAE.\n\n"
+            "**Выход:** `runs/colab_pipeline_rf/rf_run/` + `metrics_*.png`.\n\n"
+            "Рекомендуется smoke (`dataset_mini`) или local mini/v003.",
+            default_mode="auto",
+        ),
         code(
-            "from pathlib import Path\nfrom IPython.display import Image, display\n\n"
-            "RUN_DIR = Path('runs/colab_pipeline_rf/rf_run')\n"
-            "!ir-pipeline train --paths configs/paths.huggingface.yaml --dataset-version dataset_mini "
+            "from pathlib import Path\n"
+            "from IPython.display import Image, display\n\n"
+            "RUN_DIR = RUNS_DIR / 'colab_pipeline_rf' / 'rf_run'\n"
+            "dv = paths['dataset_version']\n"
+            "print('train:', PATHS_YAML, 'version=', dv)\n"
+            "!ir-pipeline train --paths {PATHS_YAML} --dataset-version {dv} "
             "--mode spectrum_structure --config configs/train_mini.yaml --run-dir {RUN_DIR}\n"
             "!ir-pipeline plot-train-metrics --run-dir {RUN_DIR}\n\n"
             "for pat in ['metrics_per_band_mae.png', 'metrics_by_group_mae.png']:\n"
@@ -339,26 +472,26 @@ NOTEBOOKS = {
         download_run_zip_cell("runs/colab_pipeline_rf/rf_run", "rf_run_colab"),
     ],
     "colab_03_train_irresnet4.ipynb": [
-        md("# Этап 3: IrResnet4 multi-label (автономный)\n\n3-канальный вход 400–4000 см⁻¹ + контекст ATR/gas/solution."),
-        bootstrap_cell(),
-        mount_google_drive_cell(),
-        md_manual_dataset_upload(),
-        extract_manual_datasets_cell(),
-        ensure_data_cell(),
+        *notebook_header(
+            "# Этап 3: IrResnet4 multi-label\n\n"
+            "**Цель:** обучить IrResnet4 (3-канальный вход + контекст измерения).\n\n"
+            "**Выход:** `runs/colab_pipeline_irresnet/irresnet_run/` (`irresnet_bundle.pt`).\n\n"
+            "Предпочтительно `dataset_v003` (local/Drive); smoke — mini.",
+            default_mode="auto",
+            full_version="dataset_v003",
+        ),
         md_cnn_hyperparameters(),
         code(
             "%matplotlib inline\n"
             "from pathlib import Path\n"
-            "from ir_pipeline.config_loader import load_yaml, merge_train_defaults, resolve_paths\n"
+            "from ir_pipeline.config_loader import load_yaml, merge_train_defaults\n"
             "from ir_pipeline.irresnet_train import train_irresnet_run\n\n"
-            "paths = resolve_paths(load_yaml(Path('configs/paths.huggingface.yaml')))\n"
             "train_cfg = merge_train_defaults(load_yaml(Path('configs/train_irresnet_colab.yaml')))\n"
-            "DATASET = paths['processed_root'] / 'dataset_v002'  # или dataset_mini\n"
-            "RUN_DIR = Path('runs/colab_pipeline_irresnet/irresnet_run')\n"
+            "RUN_DIR = RUNS_DIR / 'colab_pipeline_irresnet' / 'irresnet_run'\n"
             "summary = train_irresnet_run(\n"
-            "    dataset_dir=DATASET,\n"
+            "    dataset_dir=DATASET_DIR,\n"
             "    run_dir=RUN_DIR,\n"
-            "    bands_yaml=paths['bands_config'],\n"
+            "    bands_yaml=BANDS_YAML,\n"
             "    train_cfg=train_cfg,\n"
             "    label_schema='structure_smarts',\n"
             ")\n"
@@ -368,76 +501,76 @@ NOTEBOOKS = {
         download_run_zip_cell("runs/colab_pipeline_irresnet/irresnet_run", "irresnet_run_colab"),
     ],
     "colab_04_gradcam.ipynb": [
-        md(
-            "# Этап 4: Grad-CAM вручную (автономный)\n\n"
-            "Наложение карт важности на спектр. Можно задать индексы спектров и классов."
+        *notebook_header(
+            "# Этап 4: Grad-CAM\n\n"
+            "**Цель:** карты важности на спектре. Нужен обученный `irresnet_bundle.pt` "
+            "(этап 3) или обучение mini здесь.\n\n"
+            "**Выход:** `reports/colab_gradcam/gradcam_*.png`.",
+            default_mode="auto",
         ),
-        bootstrap_cell(),
-        mount_google_drive_cell(),
-        md_manual_dataset_upload(),
-        extract_manual_datasets_cell(),
-        ensure_data_cell(),
         code(
-            "from pathlib import Path\nfrom IPython.display import Image, display\n\n"
-            "PIPELINE_RUN = Path('runs/colab_pipeline_gradcam')\n"
+            "from pathlib import Path\n"
+            "from IPython.display import Image, display\n\n"
+            "dv = paths['dataset_version']\n"
+            "PIPELINE_RUN = RUNS_DIR / 'colab_pipeline_gradcam'\n"
             "bundles = sorted(Path('runs').rglob('irresnet_bundle.pt'))\n"
             "if not bundles:\n"
-            "    print('Нет обученной модели — тренируем...')\n"
-            "    !ir-pipeline irresnet-train --paths configs/paths.huggingface.yaml "
-            "--dataset-version dataset_mini --config configs/train_irresnet.yaml "
+            "    print('Нет модели — тренируем mini/текущий датасет...')\n"
+            "    !ir-pipeline irresnet-train --paths {PATHS_YAML} "
+            "--dataset-version {dv} --config configs/train_irresnet.yaml "
             "--run-dir {PIPELINE_RUN / 'irresnet_run'}\n"
             "    bundles = sorted(Path('runs').rglob('irresnet_bundle.pt'))\n\n"
             "IR_RUN = bundles[-1].parent\n"
             "OUT = Path('reports/colab_gradcam')\n"
-            "# Авто: первые 3 спектра. Ручной режим — раскомментируйте:\n"
-            "# !ir-pipeline gradcam-examples --paths configs/paths.huggingface.yaml --run-dir {IR_RUN} "
+            "# Ручной режим — раскомментируйте:\n"
+            "# !ir-pipeline gradcam-examples --paths {PATHS_YAML} --run-dir {IR_RUN} "
             "--output-dir {OUT} --spectrum-indices 0,7,15 --class-indices 3,12\n"
-            "!ir-pipeline gradcam-examples --paths configs/paths.huggingface.yaml "
+            "!ir-pipeline gradcam-examples --paths {PATHS_YAML} "
             "--run-dir {IR_RUN} --output-dir {OUT} --n-examples 3\n\n"
             "for p in sorted(OUT.glob('gradcam_*.png'))[:3]:\n"
             "    display(Image(filename=str(p), width=900))\n"
         ),
         md_download_run(),
         code(
+            "# Только Colab. Локально пропустите.\n"
             "from pathlib import Path\n"
-            "import shutil\n"
-            "from google.colab import files\n\n"
-            "bundles = sorted(Path('runs').rglob('irresnet_bundle.pt'))\n"
-            "if not bundles:\n"
-            "    raise FileNotFoundError('Нет irresnet_bundle.pt — сначала обучите модель.')\n"
-            "RUN_DIR = bundles[-1].parent\n"
-            "print('Run dir:', RUN_DIR)\n\n"
-            "zip_path = Path('/content/irresnet_gradcam_run_colab.zip')\n"
-            "if zip_path.exists():\n"
-            "    zip_path.unlink()\n"
-            "shutil.make_archive(str(zip_path.with_suffix('')), 'zip', RUN_DIR)\n"
-            "print(f'Архив: {zip_path} ({zip_path.stat().st_size / 1e6:.2f} MB)')\n"
-            "files.download(str(zip_path))\n"
+            "import shutil\n\n"
+            "try:\n"
+            "    from google.colab import files\n"
+            "except ImportError:\n"
+            "    print('Не Colab — пропуск скачивания')\n"
+            "else:\n"
+            "    bundles = sorted(Path('runs').rglob('irresnet_bundle.pt'))\n"
+            "    if not bundles:\n"
+            "        raise FileNotFoundError('Нет irresnet_bundle.pt')\n"
+            "    RUN_DIR = bundles[-1].parent\n"
+            "    zip_path = Path('/content/irresnet_gradcam_run_colab.zip')\n"
+            "    if zip_path.exists():\n"
+            "        zip_path.unlink()\n"
+            "    shutil.make_archive(str(zip_path.with_suffix('')), 'zip', RUN_DIR)\n"
+            "    print(f'Архив: {zip_path}')\n"
+            "    files.download(str(zip_path))\n"
         ),
     ],
     "colab_05_irresnet_experiments.ipynb": [
-        md(
+        *notebook_header(
             "# Этап 5: сравнение IrResnet4 (hidden=72)\n\n"
-            "E1–E4: SMARTS-only vs SMARTS+peak × контекст измерения on/off.\n"
-            "Требуется `dataset_v002` с `labels_structure_smarts.parquet`."
+            "**Цель:** E1–E4 — SMARTS-only vs SMARTS+peak × контекст on/off.\n\n"
+            "**Вход:** датасет с `labels_structure_smarts.parquet` "
+            "(лучше `dataset_v003`; допускается v002).\n\n"
+            "**Выход:** `runs/exp_v003/summary.json`, bar chart F1.",
+            default_mode="auto",
+            full_version="dataset_v003",
         ),
-        bootstrap_cell(),
-        mount_google_drive_cell(),
-        md_manual_dataset_upload(),
-        extract_manual_datasets_cell(),
-        ensure_data_cell(),
         code("%matplotlib inline\n"),
         code(
             "from pathlib import Path\n"
-            "import json\n"
             "import pandas as pd\n"
-            "from ir_pipeline.config_loader import load_yaml, merge_train_defaults, resolve_paths\n"
             "from ir_pipeline.dataset_preview import build_multilabel_matrix\n"
             "from ir_pipeline.resnet_input import load_model_inputs\n\n"
-            "paths = resolve_paths(load_yaml(Path('configs/paths.huggingface.yaml')))\n"
-            "DATASET = paths['processed_root'] / 'dataset_v002'\n"
+            "DATASET = DATASET_DIR\n"
             "_, _, spec_ids, _, _ = load_model_inputs(DATASET)\n"
-            "bands = paths['bands_config']\n"
+            "bands = BANDS_YAML\n"
             "rows = []\n"
             "for schema in ['structure_smarts', 'structure', 'spectrum']:\n"
             "    try:\n"
@@ -459,11 +592,12 @@ NOTEBOOKS = {
             "    ('E3', 'structure_smarts', True),\n"
             "    ('E4', 'structure', True),\n"
             "]\n"
+            "EXP_ROOT = RUNS_DIR / 'exp_v003'\n"
             "summaries = []\n"
             "for exp_id, schema, use_ctx in EXPERIMENTS:\n"
             "    cfg = deepcopy(base_cfg)\n"
             "    cfg['use_measurement_context'] = use_ctx\n"
-            "    run_dir = Path('runs/exp_v002') / f'{exp_id.lower()}_h72_{\"ctx\" if use_ctx else \"noctx\"}_{schema}'\n"
+            "    run_dir = EXP_ROOT / f'{exp_id.lower()}_h72_{\"ctx\" if use_ctx else \"noctx\"}_{schema}'\n"
             "    print('===', exp_id, schema, 'context=', use_ctx, '=>', run_dir)\n"
             "    s = train_irresnet_run(\n"
             "        dataset_dir=DATASET,\n"
@@ -482,7 +616,7 @@ NOTEBOOKS = {
             "from pathlib import Path\n"
             "import pandas as pd\n\n"
             "df = pd.DataFrame(summaries)\n"
-            "out = Path('runs/exp_v002')\n"
+            "out = RUNS_DIR / 'exp_v003'\n"
             "out.mkdir(parents=True, exist_ok=True)\n"
             "(out / 'summary.json').write_text(df.to_json(orient='records', indent=2), encoding='utf-8')\n"
             "fig, ax = plt.subplots(figsize=(8, 4))\n"
@@ -499,36 +633,28 @@ NOTEBOOKS = {
         ),
     ],
     "colab_07_kan_compare.ipynb": [
-        md(
-            "# KAN vs 1D CNN: обучение M0/M1/M2 в Colab\n\n"
-            "Сравнение **IrResnet4** (M0), **IrKanHybrid** (M1), **IrKanNet** (M2) при одинаковом `hidden_size`.\n\n"
-            "**Drive:** `ir_data/processed/dataset_v003`, `ir_data/external_sdbs/sdbs_eval.npz`, "
-            "`ir_expert_system_3/runs/`."
-        ),
-        bootstrap_cell(),
-        code(
-            "from pathlib import Path\n"
-            "from google.colab import drive\n\n"
-            "drive.mount('/content/drive')\n"
-            "IR_DATA = Path('/content/drive/MyDrive/ir_data')\n"
-            "RUNS_DRIVE = Path('/content/drive/MyDrive/ir_expert_system_3/runs')\n"
-            "SDSBS_EVAL = IR_DATA / 'external_sdbs' / 'sdbs_eval.npz'\n"
-            "RUNS_DRIVE.mkdir(parents=True, exist_ok=True)\n"
-            "print('IR_DATA', IR_DATA.exists())\n"
-            "print('SDSBS_EVAL', SDSBS_EVAL.exists())\n"
+        *notebook_header(
+            "# Этап 7: KAN vs 1D CNN (M0/M1/M2)\n\n"
+            "**Цель:** сравнить IrResnet4 (M0), IrKanHybrid (M1), IrKanNet (M2).\n\n"
+            "**Вход:** `dataset_v003` (+ опционально `external_sdbs/sdbs_eval.npz`).\n\n"
+            "**Colab full:** выполните A + A2 + C. **Local:** B + C (`paths.local.yaml`).",
+            include_drive=True,
+            default_mode="auto",
+            full_version="dataset_v003",
+            fetch_hf_if_missing=False,
         ),
         code(
-            "import os\n"
-            "from pathlib import Path\n"
-            "from ir_pipeline.config_loader import load_yaml, merge_train_defaults, resolve_paths\n\n"
-            "os.environ['IR_PROCESSED_ROOT'] = str(IR_DATA / 'processed')\n"
-            "paths_cfg = load_yaml(Path('configs/paths.colab.yaml'))\n"
-            "paths_cfg['dataset_version'] = 'dataset_v003'\n"
-            "paths = resolve_paths(paths_cfg)\n"
-            "DATASET_DIR = paths['processed_root'] / paths['dataset_version']\n"
-            "BANDS_YAML = paths['bands_config']\n"
+            "# Пути SDBS holdout и runs на Drive (если A2 выполнен)\n"
+            "from pathlib import Path\n\n"
+            "if 'IR_DATA' in globals():\n"
+            "    SDSBS_EVAL = Path(IR_DATA) / 'external_sdbs' / 'sdbs_eval.npz'\n"
+            "    if 'RUNS_DRIVE' not in globals():\n"
+            "        RUNS_DRIVE = Path('/content/drive/MyDrive/ir_expert_system_3/runs')\n"
+            "else:\n"
+            "    SDSBS_EVAL = Path('data/external_sdbs/sdbs_eval.npz')\n"
+            "    RUNS_DRIVE = None\n"
+            "print('SDSBS_EVAL', SDSBS_EVAL, SDSBS_EVAL.is_file())\n"
             "assert (DATASET_DIR / 'model_inputs.npz').is_file(), DATASET_DIR\n"
-            "print('dataset:', DATASET_DIR)\n"
         ),
         md("## Данные и DataLoader (smoke test)"),
         code(
@@ -562,33 +688,21 @@ NOTEBOOKS = {
         ),
         md(
             "## Модели M0/M1/M2\n\n"
-            "Код импортируется из пакета (`ir_pipeline.models`). Для экспериментов редактируйте "
-            "`src/ir_pipeline/models/` и выполните `pip install -e .[torch]`."
+            "Код из пакета (`ir_pipeline.models`). Правки: `src/ir_pipeline/models/` + "
+            "`pip install -e .[torch]`."
         ),
         code(
-            "from ir_pipeline.models.kan_layers import KANLinear, ConvKAN1d, KANHead, KanBasicBlock\n"
-            "from ir_pipeline.models.ir_resnet4 import IrResnet4\n"
-            "from ir_pipeline.models.ir_kan_hybrid import IrKanHybrid\n"
-            "from ir_pipeline.models.ir_kan_net import IrKanNet\n"
-            "from ir_pipeline.models.model_factory import build_spectrum_model, count_parameters, MODEL_FAMILIES\n\n"
-            "def build_model(family, hidden_size, n_classes, context_dim=12):\n"
-            "    return build_spectrum_model(\n"
-            "        family,\n"
-            "        hidden_size=hidden_size,\n"
-            "        class_nums=n_classes,\n"
-            "        context_dim=context_dim,\n"
-            "        train_cfg=TRAIN_CFG,\n"
-            "    )\n\n"
+            "from ir_pipeline.models.model_factory import build_spectrum_model, MODEL_FAMILIES\n\n"
             "print('families:', MODEL_FAMILIES)\n"
         ),
         md("## Обучение одной модели и сравнение всех трёх"),
         code(
             "import json\n"
             "import shutil\n"
-            "import time\n"
             "from copy import deepcopy\n"
             "from pathlib import Path\n"
             "import pandas as pd\n"
+            "from ir_pipeline.config_loader import load_yaml, merge_train_defaults\n"
             "from ir_pipeline.irresnet_train import train_irresnet_run\n\n"
             "TRAIN_CFG = merge_train_defaults(load_yaml(Path('configs/train_kan_colab.yaml')))\n"
             "HIDDEN_SIZE = int(TRAIN_CFG.get('compare_hidden_size', TRAIN_CFG.get('ir_hidden_size', 34)))\n"
@@ -609,9 +723,7 @@ NOTEBOOKS = {
             "    download_zip: bool = False,\n"
             ") -> pd.DataFrame:\n"
             "    run_root.mkdir(parents=True, exist_ok=True)\n"
-            "    summaries = []\n"
-            "    histories = {}\n"
-            "    run_dirs = {}\n"
+            "    summaries, histories, run_dirs = [], {}, {}\n"
             "    for fam in model_families:\n"
             "        label = FAMILY_LABELS.get(fam, fam)\n"
             "        sub = run_root / f'{label.lower()}_{fam}'\n"
@@ -643,12 +755,15 @@ NOTEBOOKS = {
             "        shutil.copytree(run_root, dest)\n"
             "        print('saved to Drive:', dest)\n"
             "    if download_zip:\n"
-            "        from google.colab import files\n"
-            "        zip_base = Path('/content') / run_root.name\n"
-            "        if Path(str(zip_base) + '.zip').exists():\n"
-            "            Path(str(zip_base) + '.zip').unlink()\n"
-            "        archive = shutil.make_archive(str(zip_base), 'zip', run_root)\n"
-            "        files.download(archive)\n"
+            "        try:\n"
+            "            from google.colab import files\n"
+            "            zip_base = Path('/content') / run_root.name\n"
+            "            if Path(str(zip_base) + '.zip').exists():\n"
+            "                Path(str(zip_base) + '.zip').unlink()\n"
+            "            archive = shutil.make_archive(str(zip_base), 'zip', run_root)\n"
+            "            files.download(archive)\n"
+            "        except ImportError:\n"
+            "            print('download_zip: не Colab')\n"
             "    globals()['COMPARE_HISTORIES'] = histories\n"
             "    globals()['COMPARE_RUN_DIRS'] = run_dirs\n"
             "    return df\n"
@@ -657,9 +772,9 @@ NOTEBOOKS = {
             "results_df = train_all_models(\n"
             "    hidden_size=HIDDEN_SIZE,\n"
             "    dataset_dir=DATASET_DIR,\n"
-            "    run_root=Path('runs') / RUN_TAG,\n"
+            "    run_root=RUNS_DIR / RUN_TAG,\n"
             "    train_cfg=TRAIN_CFG,\n"
-            "    save_to_drive=RUNS_DRIVE / RUN_TAG,\n"
+            "    save_to_drive=(RUNS_DRIVE / RUN_TAG) if RUNS_DRIVE else None,\n"
             "    download_zip=False,\n"
             ")\n"
             "display(results_df[['model_label', 'model_family', 'n_params', 'test_f1_weighted', 'test_lrap', 'train_wall_time_sec']])\n"
@@ -685,7 +800,7 @@ NOTEBOOKS = {
             "    plt.show()\n\n"
             "plot_training_comparison(\n"
             "    COMPARE_HISTORIES,\n"
-            "    out_path=Path('runs') / RUN_TAG / 'training_curves.png',\n"
+            "    out_path=RUNS_DIR / RUN_TAG / 'training_curves.png',\n"
             ")\n"
         ),
         md("## Внешний тест: SDBS (вне dataset_v003)"),
@@ -702,7 +817,7 @@ NOTEBOOKS = {
             "    X_ext, ext_ids, sdbs_z = load_sdbs_eval(SDSBS_EVAL)\n"
             "    print('external spectra:', X_ext.shape)\n"
             "else:\n"
-            "    print('Нет', SDSBS_EVAL, '— соберите локально: python tools/build_sdbs_holdout.py')\n"
+            "    print('Нет', SDSBS_EVAL, '— python tools/build_sdbs_holdout.py')\n"
             "    X_ext, ext_ids = None, []\n"
         ),
         md("## Инференс и визуализация внимания"),
@@ -726,7 +841,7 @@ NOTEBOOKS = {
             "    model.load_state_dict(ck['model_state'])\n"
             "    model.eval()\n"
             "    return model, meta\n\n"
-            "def run_external_inference(bundles: dict[str, Path], X_ext: np.ndarray, class_names: list[str], threshold=0.5):\n"
+            "def run_external_inference(bundles, X_ext, class_names, threshold=0.5):\n"
             "    rows = []\n"
             "    for label, bpath in bundles.items():\n"
             "        model, meta = load_bundle_model(bpath)\n"

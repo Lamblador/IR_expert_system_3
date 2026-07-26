@@ -1,0 +1,14 @@
+# Скопируйте в paths.local.yaml и пропишите свои абсолютные пути.
+# Переопределение env: IR_RAW_JCAMP_DIR, IR_PROCESSED_ROOT, IR_DATASET_PROFILE
+#
+# raw_jcamp_dir  — каталог с JCAMP (SDBS / NIST *.jdx)
+# processed_root — родитель каталогов dataset_v003 / dataset_mini / …
+# dataset_version — явное имя версии (перекрывает dataset_profile)
+
+raw_jcamp_dir: F:/Repo/SDBS_extraction/data/export/jcamp_sdbs
+processed_root: F:/Repo/SDBS_extraction/data/raw/nist
+dataset_version: dataset_v003
+bands_config: configs/bands_reference.yaml
+
+# Альтернатива без явной версии:
+# dataset_profile: auto   # dataset_v003 если есть spectra.npz, иначе dataset_mini

@@ -1,6 +1,5 @@
-# Локальные пути (Windows/Linux). Переопределение: IR_RAW_JCAMP_DIR, IR_PROCESSED_ROOT, IR_DATASET_PROFILE
-raw_jcamp_dir: downloaded_jcamp
-processed_root: data/processed
-dataset_profile: auto
-# dataset_version: dataset_v001  # явное имя перекрывает profile
+# Локальные пути (Windows). Переопределение: IR_RAW_JCAMP_DIR, IR_PROCESSED_ROOT, IR_DATASET_PROFILE
+raw_jcamp_dir: F:\Repo\SDBS_extraction\data\export\jcamp_sdbs
+processed_root: F:\Repo\SDBS_extraction\data\raw\nist
+dataset_version: dataset_v003
 bands_config: configs/bands_reference.yaml

@@ -63,15 +63,22 @@ ir-pipeline gradcam-examples --run-dir runs/<irresnet_run> \
 
 При ошибке: `error_log.txt` и `stage_status.json` в каталоге стадии.
 
-## Colab-ноутбуки
+## Ноутбуки (Local + Colab)
 
-По одному notebook на этап — см. [`notebooks/`](../notebooks/):
+Dual-workflow (ячейки **A** Colab / **B** Local / **C** пути): см. [`NOTEBOOKS.md`](NOTEBOOKS.md), API — [`NOTEBOOK_API.md`](NOTEBOOK_API.md).
 
-- `colab_00_setup.ipynb` — clone, pip
-- `colab_01_dataset.ipynb` — fetch + preview
-- `colab_02_baseline_rf.ipynb` — RF + метрики
-- `colab_03_train_irresnet4.ipynb` — IrResnet4
-- `colab_04_gradcam.ipynb` — Grad-CAM
+| Ноутбук | Стадии / команды | Артефакты |
+|---------|------------------|-----------|
+| `colab_00_setup` | env + проверка данных | установленный пакет |
+| `colab_01_dataset` | `dataset_preview` | preview PNG |
+| `colab_02_baseline_rf` | `train_rf`, `plot_rf_metrics` | RF run + MAE |
+| `colab_03_train_irresnet4` | `irresnet-train` | `irresnet_bundle.pt` |
+| `colab_04_gradcam` | `gradcam-examples` | Grad-CAM PNG |
+| `colab_05_irresnet_experiments` | E1–E4 `train_irresnet_run` | `runs/exp_v003/` |
+| `colab_06_irresnet_train_drive` | A/B v002 original protocol | `runs/colab06_*` |
+| `colab_07_kan_compare` | M0/M1/M2 + SDBS | `runs/kan_cmp_*` |
+
+Оглавление: [`notebooks/colab_launcher.ipynb`](../notebooks/colab_launcher.ipynb).
 
 ## Условия измерения (газ / раствор / ATR)
 

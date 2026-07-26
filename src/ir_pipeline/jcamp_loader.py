@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+_RE_NUM = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
 
 
 @dataclass
@@ -27,12 +31,175 @@ def read_jcamp_dict(path: Path) -> dict[str, Any]:
     """Читает JCAMP-DX через пакет jcamp или PerkinElmer ASCII (*.asc)."""
     if path.suffix.lower() == ".asc":
         return _read_perkinelmer_ascii(path)
+
+    # SDBS_extraction: ##XYDATA=(X++(Y..Y)), но в строках лежат пары X Y X Y…
+    # Пакет jcamp тогда сыпет X-Check и получает len(x)!=len(y).
+    if _is_mislabeled_xy_pairs(path):
+        return _read_mislabeled_xy_pairs(path)
+
     jc = _try_import_jcamp()
-    if hasattr(jc, "readfile"):
-        return jc.readfile(str(path))
-    if hasattr(jc, "jcamp_readfile"):
-        return jc.jcamp_readfile(str(path))
-    raise RuntimeError("Не найдена функция readfile в пакете jcamp")
+    sink = io.StringIO()
+    with contextlib.redirect_stdout(sink):
+        if hasattr(jc, "readfile"):
+            d = jc.readfile(str(path))
+        elif hasattr(jc, "jcamp_readfile"):
+            d = jc.jcamp_readfile(str(path))
+        else:
+            raise RuntimeError("Не найдена функция readfile в пакете jcamp")
+
+    x = d.get("x")
+    y = d.get("y")
+    if x is not None and y is not None and len(np.asarray(x)) != len(np.asarray(y)):
+        # запасной путь, если эвристика не сработала на заголовке
+        if _is_mislabeled_xy_pairs(path, force_scan=True):
+            return _read_mislabeled_xy_pairs(path)
+    return d
+
+
+def _jcamp_header_and_data_lines(path: Path) -> tuple[dict[str, str], list[str]]:
+    text = path.read_text(encoding="latin-1", errors="replace")
+    header: dict[str, str] = {}
+    data_lines: list[str] = []
+    in_xydata = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("$$"):
+            continue
+        if line.startswith("##"):
+            body = line[2:]
+            if "=" not in body:
+                continue
+            lhs, rhs = body.split("=", 1)
+            key = lhs.strip().lower()
+            val = rhs.strip()
+            header[key] = val
+            if key in {"xydata", "xypoints", "peak table"}:
+                in_xydata = True
+                data_lines = []
+            elif key == "end":
+                in_xydata = False
+            continue
+        if in_xydata:
+            data_lines.append(line)
+    return header, data_lines
+
+
+def _first_data_numbers(data_lines: list[str], limit: int = 40) -> list[float]:
+    nums: list[float] = []
+    for line in data_lines:
+        for m in _RE_NUM.finditer(line):
+            nums.append(float(m.group(0)))
+            if len(nums) >= limit:
+                return nums
+    return nums
+
+
+def _looks_like_xy_pairs(nums: list[float]) -> bool:
+    """True, если числа чередуются как wavenumber, intensity, wavenumber, …"""
+    if len(nums) < 6 or len(nums) % 2 != 0:
+        # для эвристики достаточно чётного префикса
+        nums = nums[: len(nums) - (len(nums) % 2)]
+    if len(nums) < 6:
+        return False
+    xs = np.asarray(nums[0::2], dtype=float)
+    ys = np.asarray(nums[1::2], dtype=float)
+    if xs.size < 3:
+        return False
+    dx = np.diff(xs)
+    # X монотонны с почти постоянным шагом; Y по масштабу не похожи на wavenumber-сетку
+    if not (np.all(dx > 0) or np.all(dx < 0)):
+        return False
+    step = float(np.median(np.abs(dx)))
+    if step <= 0:
+        return False
+    if float(np.max(np.abs(np.abs(dx) - step))) > max(0.05 * step, 0.5):
+        return False
+    # типичный IR: X ~ сотни–тысячи, Y обычно меньше шага сетки / порядка единиц
+    y_scale = float(np.nanmax(np.abs(ys))) if ys.size else 0.0
+    if y_scale > max(abs(float(xs[0])), 50.0) and y_scale > 10 * step:
+        return False
+    return True
+
+
+def _is_mislabeled_xy_pairs(path: Path, *, force_scan: bool = False) -> bool:
+    header, data_lines = _jcamp_header_and_data_lines(path)
+    xydata = header.get("xydata", "").replace(" ", "").upper()
+    if not force_scan and xydata != "(X++(Y..Y))":
+        return False
+    if not data_lines:
+        return False
+    return _looks_like_xy_pairs(_first_data_numbers(data_lines))
+
+
+def _header_float(header: dict[str, str], key: str, default: float | None = None) -> float | None:
+    raw = header.get(key)
+    if raw is None:
+        return default
+    try:
+        return float(raw.replace(",", ".", 1))
+    except ValueError:
+        return default
+
+
+def _read_mislabeled_xy_pairs(path: Path) -> dict[str, Any]:
+    """Парсит JCAMP, где под (X++(Y..Y)) лежат пары X Y (экспорт SDBS_extraction)."""
+    header, data_lines = _jcamp_header_and_data_lines(path)
+    nums: list[float] = []
+    for line in data_lines:
+        nums.extend(float(m.group(0)) for m in _RE_NUM.finditer(line))
+    if len(nums) < 8 or len(nums) % 2 != 0:
+        raise ValueError(f"JCAMP XY-pairs parse error in {path}: odd/short numeric stream")
+
+    xs = np.asarray(nums[0::2], dtype=float)
+    ys = np.asarray(nums[1::2], dtype=float)
+    xfactor = _header_float(header, "xfactor", 1.0) or 1.0
+    yfactor = _header_float(header, "yfactor", 1.0) or 1.0
+    xs = xs * xfactor
+    ys = ys * yfactor
+
+    out: dict[str, Any] = {
+        "filename": str(path),
+        "title": header.get("title", path.stem),
+        "origin": header.get("origin", ""),
+        "owner": header.get("owner", ""),
+        "xunits": header.get("xunits", "1/CM"),
+        "yunits": header.get("yunits", ""),
+        "xfactor": xfactor,
+        "yfactor": yfactor,
+        "firstx": _header_float(header, "firstx", float(xs[0])),
+        "lastx": _header_float(header, "lastx", float(xs[-1])),
+        "npoints": int(xs.size),
+        "xydata": "(XY..XY)",
+        "x": xs,
+        "y": ys,
+        "cas registry no": header.get("cas registry no", ""),
+        "molform": header.get("molform", ""),
+        "state": header.get("state", header.get("sample state", "")),
+        "sample state": header.get("sample state", header.get("state", "")),
+        "data type": header.get("data type", "INFRARED SPECTRUM"),
+    }
+    for k in ("inchi", "inchikey", "sdbs_spcode", "source"):
+        if k in header and header[k]:
+            out[k] = header[k]
+    return out
+
+
+def extract_jcamp_structure_ids(d: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Достаёт (InChI, InChIKey) из заголовка JCAMP, если есть."""
+    inchi = d.get("inchi")
+    if inchi is None:
+        inchi = d.get("INCHI")
+    inchikey = d.get("inchikey")
+    if inchikey is None:
+        inchikey = d.get("INCHIKEY")
+    inchi_s = str(inchi).strip() if inchi not in (None, "") else None
+    ik_s = str(inchikey).strip().upper() if inchikey not in (None, "") else None
+    if inchi_s and inchi_s.upper().startswith("INCHIKEY="):
+        # защита от путаницы ключей
+        inchi_s = None
+    if ik_s and ik_s.startswith("INCHI="):
+        ik_s = None
+    return inchi_s, ik_s
 
 
 def cas_from_filename(path: Path) -> str | None:

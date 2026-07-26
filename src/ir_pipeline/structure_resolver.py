@@ -105,6 +105,9 @@ def seed_structure_cache_from_lamblador(
         cas = _normalize_cas(row.get("cas"))
         if cas:
             keys.append(f"cas:{cas}")
+        ik = _normalize_inchikey(row.get("inchikey"))
+        if ik:
+            keys.append(f"inchikey:{ik}")
         for name_col in ("name", "title"):
             name_key = _name_lookup_key(row.get(name_col))
             if name_key:
@@ -172,6 +175,41 @@ def _normalize_cas(value: Any) -> str | None:
     if not cas or not re.fullmatch(r"\d{2,10}-\d{2}-\d", cas):
         return None
     return cas
+
+
+def _normalize_inchikey(value: Any) -> str | None:
+    text = _first_text(value)
+    if not text:
+        return None
+    ik = text.strip().upper()
+    # стандартный InChIKey: 14-1-8 символов через дефис
+    if not re.fullmatch(r"[A-Z]{14}-[A-Z]{10}-[A-Z]", ik):
+        # допускаем укороченные/нестандартные ключи из экспорта, если похожи
+        if len(ik) < 14 or " " in ik:
+            return None
+    return ik
+
+
+def _cache_put_resolution(cache: dict[str, dict[str, Any]], key: str, res: dict[str, Any]) -> None:
+    current = cache.get(key)
+    if current and current.get("smiles") and not res.get("smiles"):
+        return
+    cache[key] = dict(res)
+
+
+def _index_resolution_keys(
+    cache: dict[str, dict[str, Any]],
+    res: dict[str, Any],
+    *,
+    cas: str | None = None,
+    inchikey: str | None = None,
+) -> None:
+    ik = _normalize_inchikey(inchikey or res.get("inchikey"))
+    if ik:
+        _cache_put_resolution(cache, f"inchikey:{ik}", res)
+    cas_n = _normalize_cas(cas)
+    if cas_n and res.get("smiles"):
+        _cache_put_resolution(cache, f"cas:{cas_n}", res)
 
 
 def _first_text(*values: Any) -> str | None:
@@ -373,27 +411,120 @@ def resolve_from_pubchem_name(title: str, sleep_s: float = 0.12) -> dict[str, An
     return _pubchem_rest_by_compound_name(title)
 
 
+def _pubchem_rest_by_inchikey(inchikey: str, retries: int = 4) -> dict[str, Any]:
+    ik = _normalize_inchikey(inchikey)
+    if not ik:
+        return {"smiles": None, "inchi": None, "inchikey": None, "source": "pubchem_inchikey", "error": "bad_inchikey"}
+    ik_enc = urllib.parse.quote(ik, safe="")
+    url = (
+        "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/inchikey/"
+        f"{ik_enc}/property/IsomericSMILES,CanonicalSMILES,InChI,InChIKey/JSON"
+    )
+    last_err = None
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            props = data["PropertyTable"]["Properties"][0]
+            smiles = props.get("IsomericSMILES") or props.get("CanonicalSMILES") or props.get("SMILES")
+            inchi = props.get("InChI")
+            inchikey_out = props.get("InChIKey") or ik
+            if not smiles:
+                return {
+                    "smiles": None,
+                    "inchi": inchi,
+                    "inchikey": inchikey_out,
+                    "source": "pubchem_inchikey",
+                    "error": "no_smiles",
+                }
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is None:
+                return {
+                    "smiles": None,
+                    "inchi": inchi,
+                    "inchikey": inchikey_out,
+                    "source": "pubchem_inchikey",
+                    "error": "rdkit_parse_failed",
+                }
+            return {
+                "smiles": Chem.MolToSmiles(mol),
+                "inchi": inchi or Chem.MolToInchi(mol),
+                "inchikey": inchikey_out or Chem.MolToInchiKey(mol),
+                "source": "pubchem_inchikey",
+                "error": None,
+            }
+        except urllib.error.HTTPError as e:
+            last_err = f"HTTPError:{e.code}"
+            if 400 <= e.code < 500:
+                break
+            time.sleep(1.2 * (attempt + 1))
+        except Exception as e:
+            last_err = str(e)
+            time.sleep(1.2 * (attempt + 1))
+    return {"smiles": None, "inchi": None, "inchikey": ik, "source": "pubchem_inchikey", "error": last_err}
+
+
+def resolve_from_pubchem_inchikey(inchikey: str, sleep_s: float = 0.12) -> dict[str, Any]:
+    """InChIKey → SMILES/InChI через PubChem."""
+    time.sleep(max(0.0, sleep_s))
+    return _pubchem_rest_by_inchikey(inchikey)
+
+
 def resolve_structure_for_record(
     cas: str | None,
     title: str | None,
     cache: dict[str, dict[str, Any]],
     sleep_s: float,
     allow_network: bool = False,
+    *,
+    inchi: str | None = None,
+    inchikey: str | None = None,
 ) -> dict[str, Any]:
-    """CAS → при неудаче TITLE (кэш с ключами `cas:` и `name:`)."""
+    """
+    Структура для записи спектра.
+
+    Приоритет: InChI из JCAMP (офлайн RDKit) → кэш InChIKey → CAS → TITLE →
+    (опционально сеть) PubChem по InChIKey/CAS/name.
+    """
     cas = (cas or "").strip()
     tit = (title or "").strip()
+    inchi_s = _first_text(inchi)
+    ik = _normalize_inchikey(inchikey)
 
+    # 1) Полный InChI из JCAMP → SMILES без сети
+    if inchi_s:
+        jcamp_res = _resolution_from_identifiers(None, inchi_s, "jcamp_inchi")
+        if jcamp_res.get("smiles"):
+            if ik and not jcamp_res.get("inchikey"):
+                jcamp_res["inchikey"] = ik
+            _index_resolution_keys(cache, jcamp_res, cas=cas or None, inchikey=ik)
+            return jcamp_res
+
+    # 2) Кэш / сеть по InChIKey
+    if ik:
+        ik_key = f"inchikey:{ik}"
+        if ik_key in cache and cache[ik_key].get("smiles"):
+            return cache[ik_key]
+        if allow_network:
+            net = resolve_from_pubchem_inchikey(ik, sleep_s=sleep_s)
+            _cache_put_resolution(cache, ik_key, net)
+            if net.get("smiles"):
+                _index_resolution_keys(cache, net, cas=cas or None, inchikey=ik)
+                return net
+
+    # 3) CAS
     if cas:
         ck = f"cas:{cas}"
         if ck not in cache:
             if allow_network:
                 cache[ck] = resolve_from_pubchem_cas(cas, sleep_s=sleep_s)
-        elif cache[ck].get("smiles"):
-            return cache[ck]
         if ck in cache and cache[ck].get("smiles"):
-            return cache[ck]
+            res = cache[ck]
+            _index_resolution_keys(cache, res, cas=cas, inchikey=ik)
+            return res
 
+    # 4) TITLE / локальная карта
     if tit and len(tit) >= 4:
         local_key = _normalize_title_for_local_lookup(tit)
         local_smiles = LOCAL_TITLE_SMILES.get(local_key)
@@ -403,36 +534,60 @@ def resolve_structure_for_record(
                 nk = _name_lookup_key(tit)
                 if nk:
                     cache[nk] = local_res
+                _index_resolution_keys(cache, local_res, cas=cas or None, inchikey=ik)
                 return local_res
         nk = _name_lookup_key(tit)
         if nk is None:
-            return {"smiles": None, "inchi": None, "inchikey": None, "source": None, "error": "title_too_short"}
+            return {
+                "smiles": None,
+                "inchi": inchi_s,
+                "inchikey": ik,
+                "source": None,
+                "error": "title_too_short",
+            }
         if nk not in cache:
             if allow_network:
                 cache[nk] = resolve_from_pubchem_name(tit, sleep_s=sleep_s)
-        elif cache[nk].get("smiles"):
-            return cache[nk]
         if nk in cache and cache[nk].get("smiles"):
-            return cache[nk]
+            res = cache[nk]
+            _index_resolution_keys(cache, res, cas=cas or None, inchikey=ik)
+            return res
 
+    # Частичный ответ: идентификаторы из JCAMP без SMILES
     if cas:
         ck = f"cas:{cas}"
         if ck in cache:
-            return cache[ck]
+            partial = dict(cache[ck])
+            partial.setdefault("inchi", inchi_s)
+            partial.setdefault("inchikey", ik)
+            return partial
     if tit and len(tit) >= 4:
         nk = _name_lookup_key(tit)
-        if nk in cache:
-            return cache[nk]
-    err = "not_in_fast_structure_cache" if not allow_network else "no_cas_or_title"
-    return {"smiles": None, "inchi": None, "inchikey": None, "source": None, "error": err}
+        if nk and nk in cache:
+            partial = dict(cache[nk])
+            partial.setdefault("inchi", inchi_s)
+            partial.setdefault("inchikey", ik)
+            return partial
+
+    if ik and f"inchikey:{ik}" in cache:
+        return cache[f"inchikey:{ik}"]
+
+    err = "not_in_fast_structure_cache" if not allow_network else "no_structure_id"
+    return {"smiles": None, "inchi": inchi_s, "inchikey": ik, "source": None, "error": err}
 
 
 def mol_from_resolution(res: dict[str, Any]) -> Chem.Mol | None:
     sm = _safe_text(res.get("smiles"))
-    if not sm:
-        return None
-    with rdBase.BlockLogs():
-        return Chem.MolFromSmiles(sm)
+    if sm:
+        with rdBase.BlockLogs():
+            mol = Chem.MolFromSmiles(sm)
+            if mol is not None:
+                return mol
+    inch = _safe_text(res.get("inchi"))
+    if inch:
+        with rdBase.BlockLogs():
+            return Chem.MolFromInchi(inch)
+    return None
 
 
 def resolve_or_cache(lookup_key: str, cache: dict[str, dict[str, Any]], resolver_fn) -> dict[str, Any]:

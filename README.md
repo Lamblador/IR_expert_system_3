@@ -11,11 +11,44 @@ pip install -e .
 pip install -e ".[torch]"
 ```
 
+## Ноутбуки: локально и Colab
+
+Подробно: [`docs/NOTEBOOKS.md`](docs/NOTEBOOKS.md), функции: [`docs/NOTEBOOK_API.md`](docs/NOTEBOOK_API.md). Оглавление: [`notebooks/colab_launcher.ipynb`](notebooks/colab_launcher.ipynb).
+
+| Среда | В каждом ноутбуке |
+|-------|-------------------|
+| **Google Colab** | ячейка **A** (+ **A2** для Drive/full); **B** не запускать |
+| **Локальный Jupyter** | ячейка **B**; **A/A2** не запускать |
+
+Затем общая ячейка **C. Пути и данные**.
+
+**Локально:**
+
+```bash
+pip install -e ".[torch]"
+copy configs\paths.local.example.yaml configs\paths.local.yaml   # Windows
+# отредактируйте raw_jcamp_dir / processed_root / dataset_version
+# откройте notebooks/colab_00_setup.ipynb → только B, затем C
+```
+
+**Colab (smoke, без Drive):** Runtime → GPU → `colab_00` → **A** → **C** (подтянет `dataset_mini` с HF).
+
+**Colab (full на Drive):** **A** → **A2** (mount) → **C**; датасет в `MyDrive/ir_data/processed/dataset_v003`.
+
+| № | Ноутбук |
+|---|---------|
+| 0–4 | setup → dataset → RF → IrResnet → Grad-CAM |
+| 5 | эксперименты E1–E4 |
+| 6 | A/B на `dataset_v002` (original protocol) |
+| 7 | KAN vs CNN (M0/M1/M2) |
+
+Регенерация: `python notebooks/_make_colab_notebooks.py`.
+
 ## Данные
 
-Положите каталог `downloaded_jcamp` в корень проекта или задайте путь в `configs/paths.local.yaml` / переменной окружения `IR_RAW_JCAMP_DIR`.
+Положите каталог JCAMP или задайте путь в `configs/paths.local.yaml` (шаблон: `configs/paths.local.example.yaml`) / `IR_RAW_JCAMP_DIR`.
 
-Большие артефакты (`data/processed/`, модели) не коммитьте; для Colab см. `configs/paths.colab.yaml`.
+Большие артефакты (`data/processed/`, модели) не коммитьте; для Colab Drive см. `configs/paths.colab.yaml`.
 
 Публичный Dataset repo по умолчанию: [Lamblador/IRSpectra2](https://huggingface.co/datasets/Lamblador/IRSpectra2). Скачивание идёт через библиотеку `huggingface_hub` (в том числе LFS/GCS), без ручных прямых ссылок.
 
@@ -103,7 +136,7 @@ ir-pipeline run profile smoke --paths configs/paths.huggingface.yaml
 ir-pipeline run stage dataset_preview --paths configs/paths.local.yaml
 ```
 
-Colab: ноутбуки в [`notebooks/`](notebooks/) (`colab_00_setup` … `colab_04_gradcam`).
+Colab / локальные ноутбуки: [`notebooks/`](notebooks/) (`colab_00` … `colab_07`, см. секцию выше).
 
 ## Команды
 
@@ -157,11 +190,11 @@ ir-pipeline gradcam-examples --run-dir runs/<irresnet_run> --spectrum-indices 0,
 
 ## Конфигурация
 
-- `configs/paths.local.yaml` — локальные пути
-- `configs/paths.colab.yaml` — пример для Google Drive
-- `configs/train_smoke.yaml` / `configs/train_gpu.yaml` / `configs/train_mini.yaml` — параметры обучения (`rf_backend: auto|sklearn|cuml` или переменная `IR_RF_BACKEND`)
-- `configs/paths.huggingface.yaml` — пути после `fetch-data` без Drive
-- `configs/bands_reference.yaml` — полосы (correlation charts + ru.wikipedia), диапазоны см⁻¹, SMARTS
+- `configs/paths.local.example.yaml` → скопировать в `paths.local.yaml` (абсолютные пути на вашей машине)
+- `configs/paths.colab.yaml` — Google Drive (`dataset_v003`)
+- `configs/paths.huggingface.yaml` — после `fetch-data` без Drive (smoke)
+- `configs/train_smoke.yaml` / `configs/train_gpu.yaml` / `configs/train_mini.yaml` — обучение (`rf_backend: auto|sklearn|cuml` или `IR_RF_BACKEND`)
+- `configs/bands_reference.yaml` — полосы, диапазоны см⁻¹, SMARTS
 
 ## Лицензии данных
 
